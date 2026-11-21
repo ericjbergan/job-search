@@ -42,6 +42,9 @@ def api_meta():
         "employment_types": jsearch.EMPLOYMENT_TYPES,
         "max_pages": jsearch.MAX_PAGES,
         "ats_labels": boards.ATS_LABELS,
+        "ats_token_hints": boards.ATS_TOKEN_HINTS,
+        "priorities": db.PRIORITIES,
+        "company_defaults": db.company_defaults(),
         "pages_used_this_month": db.pages_used_this_month(),
         "has_api_key": bool(os.getenv("JSEARCH_API_KEY")),
     })
@@ -113,14 +116,25 @@ def api_quick_search():
 
 def _company_fields(data):
     """Clean form input; fill in ats/ats_token from the careers URL when not given."""
-    fields = {k: (data.get(k) or "").strip() or None for k in db.COMPANY_FIELDS if k in data}
+    fields = {}
+    for k in db.COMPANY_FIELDS:
+        if k not in data:
+            continue
+        value = data[k]
+        if k in ("priority", "rating"):
+            try:
+                fields[k] = None if value in (None, "") else (int(value) if k == "priority" else float(value))
+            except (TypeError, ValueError):
+                raise ValueError(f"{k.capitalize()} must be a number")
+        else:
+            fields[k] = (str(value) if value is not None else "").strip() or None
     if "careers_url" in fields and not fields.get("ats"):
         fields["ats"], token = boards.detect_ats(fields["careers_url"])
         fields["ats_token"] = fields.get("ats_token") or token
     if fields.get("ats") and fields["ats"] not in boards.ATS_TYPES:
         raise ValueError(f"Unknown job board type: {fields['ats']}")
-    if fields.get("ats") in ("greenhouse", "lever", "ashby") and not fields.get("ats_token"):
-        raise ValueError("That job board type needs a board name (the part after the domain in the careers URL)")
+    if fields.get("ats") not in (None, "search", "amazon") and not fields.get("ats_token"):
+        raise ValueError(f"{boards.ATS_LABELS[fields['ats']]} needs a board ID: {boards.ATS_TOKEN_HINTS[fields['ats']]}")
     return fields
 
 

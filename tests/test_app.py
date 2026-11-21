@@ -39,7 +39,7 @@ class FreshDbTest(unittest.TestCase):
     def setUp(self):
         if os.path.exists(os.environ["JOBSEARCH_DB"]):
             os.remove(os.environ["JOBSEARCH_DB"])
-        db.init_db()
+        db.init_db(seed_path=None)
         self.client = app_module.app.test_client()
 
 
@@ -84,9 +84,9 @@ class BoardTests(unittest.TestCase):
 
     def test_jsearch_fallback_keeps_only_that_employer(self):
         results = [
-            {"job_id": "a", "job_title": "Dev", "employer_name": "JPMorgan Chase & Co."},
-            {"job_id": "b", "job_title": "Dev", "employer_name": "Some Staffing Firm"},
-            {"job_id": "c", "job_title": "Dev", "employer_name": None},
+            {"job_id": "a", "job_title": "Java Dev", "employer_name": "JPMorgan Chase & Co."},
+            {"job_id": "b", "job_title": "Java Dev", "employer_name": "Some Staffing Firm"},
+            {"job_id": "c", "job_title": "Java Dev", "employer_name": None},
         ]
         with mock.patch("jobsearch.jsearch.search", return_value=(results, 1)):
             jobs, pages = boards.check_company({"name": "JPMorgan Chase", "ats": "search", "keywords": "java"})
@@ -159,7 +159,7 @@ class BackupTests(unittest.TestCase):
 
             db_file = os.path.join(clone, "jobs.db")
             with mock.patch.object(db, "REPO_DIR", clone), mock.patch.dict(os.environ, {"JOBSEARCH_DB": db_file}):
-                db.init_db()
+                db.init_db(seed_path=None)
                 db.save_results(sample_results()[:2])
                 client = app_module.app.test_client()
                 first = client.post("/api/backup").get_json()
@@ -169,3 +169,67 @@ class BackupTests(unittest.TestCase):
             self.assertEqual(second, {"ok": True, "committed": False})
             log = subprocess.run(["git", "log", "--oneline", "main"], cwd=remote, capture_output=True, text=True).stdout
             self.assertIn("Back up job search data", log)
+
+
+class SeedAndDetectTests(FreshDbTest):
+    def test_seed_loads_once_and_not_after_deletes(self):
+        os.remove(os.environ["JOBSEARCH_DB"])
+        db.init_db()  # real seed file
+        companies = db.list_companies()
+        self.assertGreater(len(companies), 50)
+        self.assertEqual(len(db.list_searches()), 2)
+        osu = next(c for c in companies if c["name"] == "OSU")
+        self.assertEqual((osu["ats"], osu["priority"], osu["rating"]), ("workday", 2, 4.1))
+        self.assertEqual(osu["keywords"], "business analyst")
+        for c in companies:
+            self.assertNotIn("password", (c.get("notes") or "").lower())
+
+        db.delete_company(osu["id"])
+        db.init_db()  # second start must not re-seed
+        self.assertEqual(len(db.list_companies()), len(companies) - 1)
+
+    def test_seed_board_ids_parse(self):
+        with open(db.SEED_PATH, encoding="utf-8") as f:
+            seed = json.load(f)
+        for c in seed["companies"]:
+            ats, token = c["ats"], c.get("ats_token")
+            self.assertIn(ats, boards.ATS_TYPES, c["name"])
+            if ats == "workday":
+                self.assertEqual(len(token.split("/")), 3, c["name"])
+            elif ats in ("ukg",):
+                self.assertEqual(len(token.split("/")), 3, c["name"])
+            elif ats == "oracle":
+                self.assertEqual(len(token.split("/")), 2, c["name"])
+            elif ats == "eightfold":
+                self.assertIn("|", token, c["name"])
+
+    def test_detect_more_platforms(self):
+        d = boards.detect_ats
+        self.assertEqual(d("https://osu.wd1.myworkdayjobs.com/en-US/OSUCareers?q=x"), ("workday", "osu.wd1.myworkdayjobs.com/osu/OSUCareers"))
+        self.assertEqual(d("https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs"), ("oracle", "jpmc.fa.oraclecloud.com/CX_1001"))
+        self.assertEqual(d("https://recruiting.ultipro.com/LIC1000LMHS/JobBoard/3a28-x/?q="), ("ukg", "recruiting.ultipro.com/LIC1000LMHS/3a28-x"))
+        self.assertEqual(d("https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=abc&ccId=1"), ("adp", "abc"))
+        self.assertEqual(d("https://libertymutual.eightfold.ai/careers?domain=libertymutual.com"), ("eightfold", "libertymutual.eightfold.ai|libertymutual.com"))
+        self.assertEqual(d("https://ats.rippling.com/joinroot/jobs"), ("rippling", "joinroot"))
+
+    def test_location_rules(self):
+        locs = boards.split_terms("columbus, dublin oh, newark oh")
+        job = lambda loc, remote=False: {"job_title": "Business Analyst", "job_location": loc, "job_is_remote": remote}
+        self.assertTrue(boards.location_matches(job("Dublin, Ohio"), locs))
+        self.assertFalse(boards.location_matches(job("Dublin, Ireland"), locs))
+        self.assertFalse(boards.location_matches(job("Newark, DE, United States"), locs))
+        self.assertTrue(boards.location_matches(job("Remote - USA", True), locs))
+        self.assertFalse(boards.location_matches(job("UK Remote", True), locs))
+        self.assertTrue(boards.location_matches(job("3 Locations"), locs, allow_unknown=True))
+        self.assertTrue(boards.title_matches(job("x") | {"job_title": "Sr. Business-Analyst II"}, ["business analyst"]))
+
+    def test_company_numeric_fields_via_api(self):
+        r = self.client.post("/api/companies", json={"name": "Acme", "priority": "1", "rating": "3.9",
+                                                     "careers_url": "https://osu.wd1.myworkdayjobs.com/OSUCareers"})
+        self.assertEqual(r.status_code, 201, r.get_json())
+        c = r.get_json()
+        self.assertEqual((c["priority"], c["rating"], c["ats"]), (1, 3.9, "workday"))
+        bad = self.client.post("/api/companies", json={"name": "Bad", "rating": "great"})
+        self.assertEqual(bad.status_code, 400)
+        no_token = self.client.post("/api/companies", json={"name": "NoTok", "ats": "jibe"})
+        self.assertEqual(no_token.status_code, 400)

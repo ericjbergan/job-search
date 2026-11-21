@@ -1,0 +1,465 @@
+{
+  "_comment": "Starter data loaded once into a brand-new jobs.db. From the 'Columbus OH Job Sites' spreadsheet; job-search sites (LinkedIn, Indeed, etc.) became the saved searches instead of companies.",
+  "defaults": {
+    "keywords": "business analyst",
+    "locations": "columbus, new albany, reynoldsburg, westerville, hilliard, grove city, worthington, gahanna, dublin oh, newark oh"
+  },
+  "companies": [
+    {
+      "name": "Abercrombie & Fitch",
+      "careers_url": "https://abercrombie.wd108.myworkdayjobs.com/en-US/anf",
+      "ats": "workday",
+      "ats_token": "abercrombie.wd108.myworkdayjobs.com/abercrombie/anf",
+      "priority": 5,
+      "rating": 3.7,
+      "notes": "Hybrid, New Albany, 2-3 days/week in office · Columbus Local · Clothing\n11/04 - there were jobs but BA was 90-100k, no senior level with pay. Keep watching this site."
+    },
+    {
+      "name": "Abbott Laboratories",
+      "careers_url": "https://www.jobs.abbott/us/en",
+      "ats": "search",
+      "priority": 1,
+      "rating": 3.7,
+      "notes": "New Albany · Columbus Local · Healthcare MFG"
+    },
+    {
+      "name": "Accenture",
+      "careers_url": "https://www.accenture.com/us-en/careers/jobsearch",
+      "ats": "workday",
+      "ats_token": "accenture.wd103.myworkdayjobs.com/accenture/AccentureCareers",
+      "priority": 7,
+      "notes": "Consulting Firm"
+    },
+    {
+      "name": "ACT",
+      "careers_url": "https://www.act.org/content/act/en/careers-at-act.html",
+      "ats": "search",
+      "priority": 5,
+      "notes": "Remote (Iowa City) · Testing Company · Admission & Testing\nNo jobs on 11/04"
+    },
+    {
+      "name": "Amazon",
+      "careers_url": "https://www.amazon.jobs/en/",
+      "ats": "amazon",
+      "ats_token": "amazon",
+      "priority": 7,
+      "notes": "Onsite · Columbus Local · Distribution\nNo jobs on 11/05"
+    },
+    {
+      "name": "American Electric Power (AEP)",
+      "careers_url": "https://www.aep.com/careers/",
+      "ats": "workday",
+      "ats_token": "aep.wd1.myworkdayjobs.com/aep/AEPCareerSite",
+      "priority": 2,
+      "rating": 3.3,
+      "notes": "Hybrid, regular on-site days · Columbus Local · Utilities\nPension, 4.5% 401k match, 3 weeks vacation + 3 personal days + sick time"
+    },
+    {
+      "name": "American Regent, Inc",
+      "careers_url": "https://americanregent.wd1.myworkdayjobs.com/en-US/American_Regent_Careers",
+      "ats": "workday",
+      "ats_token": "americanregent.wd1.myworkdayjobs.com/americanregent/American_Regent_Careers",
+      "priority": 4,
+      "rating": 3.3,
+      "notes": "New Albany - onsite but hybrid maybe possible depending on position · Columbus Local · Pharmaceutical MFG\n6% match + profit sharing; PTO? + 4 personal days & 15 holidays (Xmas-New Year)"
+    },
+    {
+      "name": "The Amatriot Group",
+      "ats": "search",
+      "rating": 4.3,
+      "notes": "Government Contract"
+    },
+    {
+      "name": "Amgen",
+      "careers_url": "https://careers.amgen.com/en/search-jobs/",
+      "ats": "workday",
+      "ats_token": "amgen.wd1.myworkdayjobs.com/amgen/Careers",
+      "priority": 6,
+      "notes": "New Albany · Columbus Local · Healthcare\nAll positions that were remote seemed to be management"
+    },
+    {
+      "name": "Battelle",
+      "careers_url": "https://jobs.battelle.org/us/en/c/corporate-roles-jobs",
+      "ats": "phenom",
+      "ats_token": "jobs.battelle.org",
+      "priority": 4,
+      "notes": "Hybrid, Columbus · Columbus Local · Research & Development\nEvery other Friday off. No jobs 11/05"
+    },
+    {
+      "name": "Bath & Body Works",
+      "careers_url": "https://careers.bathandbodyworks.com/jobs",
+      "ats": "search",
+      "priority": 1,
+      "rating": 3.7,
+      "notes": "Hybrid, Columbus, 2 days/week in office · Columbus Local · Lotions etc\n5% 401K match"
+    },
+    {
+      "name": "Bread Financial",
+      "careers_url": "https://careers.breadfinancial.com/us/en/life-at-bread-financial-us",
+      "ats": "phenom",
+      "ats_token": "careers.breadfinancial.com",
+      "priority": 6,
+      "notes": "Hybrid, Columbus, regular on-site days · Columbus Local · Finance\non 11/05 - jobs were all very finance focused - my skills didn't apply"
+    },
+    {
+      "name": "CACI International",
+      "careers_url": "https://careers.caci.com/",
+      "ats": "search",
+      "priority": 1,
+      "rating": 3.7,
+      "notes": "Remote · Remote Company · Government\n4% matching; unlimited PTO I believe"
+    },
+    {
+      "name": "Cambium Learning Group",
+      "careers_url": "https://jobs.cambiumlearning.com/",
+      "ats": "search",
+      "priority": 2,
+      "notes": "Remote · Testing Company · K-12 Educational Assessment"
+    },
+    {
+      "name": "Camunda",
+      "careers_url": "https://camunda.com/careers/all-jobs/",
+      "ats": "ashby",
+      "ats_token": "camunda",
+      "priority": 5,
+      "rating": 3.6,
+      "notes": "Global · Partial Remote · Enterprise Software\nNo jobs on 11/04"
+    },
+    {
+      "name": "Captech",
+      "ats": "search",
+      "priority": 1
+    },
+    {
+      "name": "Cardinal Health",
+      "careers_url": "https://jobs.cardinalhealth.com/",
+      "ats": "search",
+      "priority": 5,
+      "rating": 3.6,
+      "notes": "Hybrid, Dublin, 2-3 days/week in office · Columbus Local · Healthcare\nNo jobs on 11/04"
+    },
+    {
+      "name": "Chipotle",
+      "careers_url": "https://jobs.chipotle.com/",
+      "ats": "radancy",
+      "ats_token": "jobs.chipotle.com",
+      "priority": 4,
+      "rating": 3.4,
+      "notes": "Columbus Local\nA few jobs on 11/05"
+    },
+    {
+      "name": "Cognia",
+      "careers_url": "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=ebbb9e9f-4b7c-4d22-9984-b930aaf04fa6&ccId=19000101_000001&type=MP&lang=en_US",
+      "ats": "adp",
+      "ats_token": "ebbb9e9f-4b7c-4d22-9984-b930aaf04fa6",
+      "priority": 5,
+      "notes": "Remote · Testing Company · K-12 Educational Assessment\nNo jobs on 11/04"
+    },
+    {
+      "name": "College Board",
+      "careers_url": "https://collegeboard.wd1.myworkdayjobs.com/en-US/Careers",
+      "ats": "workday",
+      "ats_token": "collegeboard.wd1.myworkdayjobs.com/collegeboard/Careers",
+      "priority": 2,
+      "notes": "Remote · Testing Company · Admission & Testing"
+    },
+    {
+      "name": "Curriculum Associates",
+      "careers_url": "https://careers.curriculumassociates.com/careers",
+      "ats": "search",
+      "priority": 5,
+      "notes": "Remote · Testing Company · K-12 Educational Assessment\nNo jobs on 11/04"
+    },
+    {
+      "name": "Data Recognition Corp",
+      "careers_url": "https://jobs.dayforcehcm.com/drc/CANDIDATEPORTAL",
+      "ats": "search",
+      "priority": 5,
+      "notes": "MN, some remote · Testing Company · K-12 Educational Assessment\nNo jobs on 11/04"
+    },
+    {
+      "name": "Deloitte",
+      "careers_url": "https://apply.deloitte.com/en_US/careers",
+      "ats": "search",
+      "priority": 2,
+      "notes": "Consulting Firm\nSearch tip - note 'Opportunities for experienced professionals' vs. 'Open talent opportunities'"
+    },
+    {
+      "name": "ETS",
+      "careers_url": "https://etscareers.pereless.com/",
+      "ats": "search",
+      "priority": 7,
+      "notes": "Testing Company · Admission & Testing\nNot great employee reviews. Pay is low; doesn't look like they have remote or jobs in OH"
+    },
+    {
+      "name": "Everforth ECS",
+      "careers_url": "https://myjobs.adp.com/ecsfederal/cx/job-listing?rb=CareerSite",
+      "ats": "search",
+      "priority": 1,
+      "rating": 3.9,
+      "notes": "Remote · Remote Company · Government"
+    },
+    {
+      "name": "Hanover Insurance Group",
+      "careers_url": "https://jobs.dayforcehcm.com/thg/ALLCAREERS",
+      "ats": "search",
+      "priority": 2,
+      "rating": 4.0,
+      "notes": "Remote (Worcester, MA) · Remote Company · Insurance\n6% 401K matching, 4 weeks vacation to start (can purchase more). Low pay: 85k-105k for a Sr BA. Though remote is an option, most do work onsite. 10-15% annual bonuses"
+    },
+    {
+      "name": "Huntington Bank",
+      "careers_url": "https://www.huntington.com/careers",
+      "ats": "search",
+      "priority": 5,
+      "notes": "Hybrid, Columbus · Columbus Local · Finance\nNo jobs on 11/04"
+    },
+    {
+      "name": "Intel",
+      "careers_url": "https://intel.wd1.myworkdayjobs.com/External",
+      "ats": "workday",
+      "ats_token": "intel.wd1.myworkdayjobs.com/intel/External",
+      "priority": 7,
+      "notes": "Hybrid, New Albany · Columbus Local\nNew Albany - very data focused"
+    },
+    {
+      "name": "JPMorgan Chase",
+      "careers_url": "https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs",
+      "ats": "oracle",
+      "ats_token": "jpmc.fa.oraclecloud.com/CX_1001",
+      "priority": 5,
+      "rating": 3.9,
+      "notes": "Onsite, Columbus · Columbus Local · Finance"
+    },
+    {
+      "name": "Kforce",
+      "careers_url": "https://www.kforce.com/find-work/search-jobs/",
+      "ats": "search",
+      "priority": 5,
+      "notes": "Consulting Firm"
+    },
+    {
+      "name": "Kryterion",
+      "careers_url": "https://www.kryterion.com/careers/",
+      "ats": "search",
+      "priority": 5,
+      "notes": "Testing Company · Pro Certification & Test Delivery\nNo jobs on 11/04"
+    },
+    {
+      "name": "Liberty Mutual",
+      "careers_url": "https://libertymutual.eightfold.ai/careers?domain=libertymutual.com",
+      "ats": "search",
+      "priority": 1,
+      "rating": 3.7,
+      "notes": "Hybrid, Columbus, regular on-site days · Columbus Local · Insurance"
+    },
+    {
+      "name": "Licking Memorial Health",
+      "careers_url": "https://recruiting.ultipro.com/LIC1000LMHS/JobBoard/3a2849cd-0da6-4a57-813a-80b366fb0172/",
+      "ats": "ukg",
+      "ats_token": "recruiting.ultipro.com/LIC1000LMHS/3a2849cd-0da6-4a57-813a-80b366fb0172",
+      "priority": 1,
+      "notes": "Onsite, Newark OH · Columbus Local · Healthcare"
+    },
+    {
+      "name": "Matrix Medical",
+      "careers_url": "https://careers.matrixmedicalnetwork.com/careers-home/jobs",
+      "ats": "jibe",
+      "ats_token": "careers.matrixmedicalnetwork.com",
+      "priority": 6,
+      "notes": "Remote · Remote Company · Healthcare"
+    },
+    {
+      "name": "McGraw Hill",
+      "careers_url": "https://careers.mheducation.com/",
+      "ats": "jibe",
+      "ats_token": "careers.mheducation.com",
+      "priority": 7,
+      "notes": "Testing Company · Publishing\nLow paying jobs"
+    },
+    {
+      "name": "McKesson",
+      "careers_url": "https://careers.mckesson.com/en",
+      "ats": "radancy",
+      "ats_token": "careers.mckesson.com",
+      "priority": 2,
+      "rating": 3.6,
+      "notes": "Hybrid, Columbus · Columbus Local · Healthcare"
+    },
+    {
+      "name": "Meazure Learning",
+      "careers_url": "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=80476592-d857-4207-83c6-fe66444a7e3b&ccId=19000101_000001&lang=en_US",
+      "ats": "adp",
+      "ats_token": "80476592-d857-4207-83c6-fe66444a7e3b",
+      "priority": 5,
+      "notes": "Durham NC, some remote · Testing Company · Pro Certification & Test Delivery\nFormerly ProctorU/Scantron. No jobs on 11/04"
+    },
+    {
+      "name": "Nationwide",
+      "careers_url": "https://careers.nationwide.com/",
+      "ats": "workday",
+      "ats_token": "nationwide.wd1.myworkdayjobs.com/nationwide/Nationwide_Career",
+      "priority": 2,
+      "rating": 3.8,
+      "notes": "Hybrid, Columbus, 2-3 days/week in office · Columbus Local · Insurance"
+    },
+    {
+      "name": "Nationwide Children's",
+      "careers_url": "https://nationwidechildrens.wd5.myworkdayjobs.com/en-US/NCHCareers",
+      "ats": "workday",
+      "ats_token": "nationwidechildrens.wd5.myworkdayjobs.com/nationwidechildrens/NCHCareers",
+      "priority": 2,
+      "notes": "Hybrid, location? · Columbus Local · Healthcare\nThey have something for spouses of veterans: https://app.oplign.com/Account/FeaturedJobKioskSpouse?SelectedCompany=780&Mode=b27889f7-eb35-442d-bfdd-593fd007a4e2"
+    },
+    {
+      "name": "OhioHealth",
+      "careers_url": "https://careers.ohiohealth.com/",
+      "ats": "workday",
+      "ats_token": "ohiohealth.wd5.myworkdayjobs.com/ohiohealth/OhioHealthJobs",
+      "priority": 7,
+      "notes": "Hybrid, Columbus, 3 days/week in office · Columbus Local · Healthcare\nEpic skills"
+    },
+    {
+      "name": "OSU",
+      "careers_url": "https://osu.wd1.myworkdayjobs.com/OSUCareers",
+      "ats": "workday",
+      "ats_token": "osu.wd1.myworkdayjobs.com/osu/OSUCareers",
+      "priority": 2,
+      "rating": 4.1,
+      "notes": "Flexible & dependent on manager · Columbus Local · Education\nGreat retirement benefits (I believe 14% contributed for the ARP plan, vested immediately). PTO is 10 days for new employees but could be higher if they use my experience years. Sick time is awesome - 15 days per year, can be saved up with no limit"
+    },
+    {
+      "name": "Park National Bank",
+      "careers_url": "https://parknationalbank.com/about/careers/",
+      "ats": "ukg",
+      "ats_token": "recruiting.ultipro.com/PAR1025PNATB/78198a68-8e94-4f76-b970-3a27214b2ee3",
+      "priority": 2,
+      "notes": "Hybrid, Newark OH · Columbus Local · Finance\nLook for Systems Analyst"
+    },
+    {
+      "name": "Pearson",
+      "careers_url": "https://pearson.jobs/locations/usa/jobs/",
+      "ats": "search",
+      "priority": 2,
+      "rating": 3.5,
+      "notes": "Testing Company · Admission & Testing\nLook for 'Advanced Specialist'. 5.5% 401k match, 15 vacation, 5 personal, 72 hours sick"
+    },
+    {
+      "name": "Prometric",
+      "careers_url": "https://jobs.dayforcehcm.com/prometric/CANDIDATEPORTAL",
+      "ats": "search",
+      "priority": 5,
+      "notes": "Remote · Testing Company · Pro Certification & Test Delivery\nNo jobs on 11/04"
+    },
+    {
+      "name": "PSI Services",
+      "careers_url": "https://psionline.rec.pro.ukg.net/PSI1500PSIL/JobBoard/287b933d-50bd-4acb-b709-75def54bf55f/",
+      "ats": "ukg",
+      "ats_token": "psionline.rec.pro.ukg.net/PSI1500PSIL/287b933d-50bd-4acb-b709-75def54bf55f",
+      "priority": 2,
+      "notes": "Remote · Testing Company · Pro Certification & Test Delivery"
+    },
+    {
+      "name": "Renaissance Learning",
+      "careers_url": "https://job-boards.greenhouse.io/renaissancelearning-nam",
+      "ats": "greenhouse",
+      "ats_token": "renaissancelearning-nam",
+      "priority": 5,
+      "notes": "Remote · Testing Company · K-12 Educational Assessment\nDidn't see BA positions but they do have Product Owner. No jobs 11/04"
+    },
+    {
+      "name": "Robert Half",
+      "careers_url": "https://www.roberthalf.com/us/en/jobs",
+      "ats": "search",
+      "priority": 5,
+      "notes": "Consulting Firm"
+    },
+    {
+      "name": "Root Insurance",
+      "careers_url": "https://ats.rippling.com/joinroot/jobs",
+      "ats": "rippling",
+      "ats_token": "joinroot",
+      "priority": 2,
+      "rating": 3.0,
+      "notes": "Remote first · Columbus Local · Insurance"
+    },
+    {
+      "name": "Slalom",
+      "careers_url": "https://jobs.slalom.com/en_US/careersmarketplace",
+      "ats": "search",
+      "priority": 5,
+      "notes": "Consulting Firm\nAll jobs seemed too data focused and high tech for my skills but I'll look again"
+    },
+    {
+      "name": "State of Ohio",
+      "careers_url": "https://dasstateoh.taleo.net/careersection/oh_ext/jobsearch.ftl?lang=en",
+      "ats": "search",
+      "priority": 7,
+      "notes": "Hybrid, Columbus, 2-3 days/week in office · Columbus Local · Government\nNot much here"
+    },
+    {
+      "name": "TEKsystems",
+      "careers_url": "https://careers.teksystems.com/us/en",
+      "ats": "search",
+      "priority": 7,
+      "notes": "Consulting Firm\nPay is low for what they have"
+    },
+    {
+      "name": "Victoria's Secret",
+      "careers_url": "https://careers.victoriassecret.com/en/job-areas/corporate/",
+      "ats": "search",
+      "priority": 1,
+      "rating": 3.5,
+      "notes": "Reynoldsburg, some hybrid, some on-site · Columbus Local · Clothing"
+    },
+    {
+      "name": "Wendy's",
+      "careers_url": "https://wendys-careers.com/",
+      "ats": "search",
+      "priority": 2,
+      "rating": 3.3,
+      "notes": "Hybrid, Dublin, 2-3 days/week in office · Columbus Local · Food\n4% 401k match"
+    },
+    {
+      "name": "Wexner Medical Center",
+      "careers_url": "https://careers.wexnermedical.osu.edu/search/searchjobs",
+      "ats": "search",
+      "priority": 2,
+      "notes": "Mostly onsite, location? · Columbus Local · Healthcare"
+    },
+    {
+      "name": "Williams",
+      "careers_url": "https://www.williams.com/careers/",
+      "ats": "workday",
+      "ats_token": "williams.wd5.myworkdayjobs.com/williams/External",
+      "priority": 2,
+      "rating": 3.8,
+      "notes": "Onsite · Columbus Local\nNew Albany"
+    },
+    {
+      "name": "Zillow",
+      "careers_url": "https://zillow.wd5.myworkdayjobs.com/Zillow_Group_External",
+      "ats": "workday",
+      "ats_token": "zillow.wd5.myworkdayjobs.com/zillow/Zillow_Group_External",
+      "priority": 1,
+      "rating": 3.2,
+      "notes": "Remote · Remote Company · Real Estate Tech"
+    }
+  ],
+  "searches": [
+    {
+      "name": "Business Analyst – Columbus",
+      "query": "business analyst",
+      "location": "Columbus, OH",
+      "date_posted": "week",
+      "num_pages": 1
+    },
+    {
+      "name": "Business Analyst – Remote",
+      "query": "business analyst",
+      "remote_only": true,
+      "date_posted": "week",
+      "num_pages": 1
+    }
+  ]
+}

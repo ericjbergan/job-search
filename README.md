@@ -3,7 +3,8 @@
 A small Flask app for running job searches on demand and tracking the results in SQLite.
 
 - **Searches** go through the [JSearch API](https://www.openwebninja.com/api/jsearch) (Google for Jobs results, which include LinkedIn, ZipRecruiter, Monster, company sites and more). Save a search and re-run it with one click; jobs already saved are skipped and new ones are flagged.
-- **Companies** you're watching are checked directly on their Greenhouse, Lever or Ashby job board (free, no API quota), filtered by title keywords and locations. Companies on other platforms fall back to a JSearch "jobs at *company*" query.
+- **Companies** you're watching are searched directly on their own careers site (free, no API quota) using the same search their careers page uses. Supported platforms: Workday, Oracle, UKG, ADP, Eightfold, iCIMS (Jibe), Radancy, Phenom, Rippling, Amazon, Greenhouse, Lever and Ashby. Results are filtered by title keywords and locations. Companies on other platforms fall back to a JSearch "*keywords* at *company*" query, which uses API quota.
+- **Starter data:** a brand-new database is loaded once from `seed/seed.json` — 56 Columbus-area companies (priority, Glassdoor rating, notes) and two saved Business Analyst searches.
 - **Tracking:** every job gets a status (new, interested, applied, interviewing, offer, rejected, not a fit) and notes. Re-running a search never overwrites them.
 - **Back up** commits `jobs.db` and pushes it to GitHub.
 
@@ -14,23 +15,31 @@ A small Flask app for running job searches on demand and tracking the results in
 3. Open `.env` and paste your JSearch key after `JSEARCH_API_KEY=`.
 4. Double-click **Job Search** on the desktop. The app opens at http://localhost:5001.
 
-The database (`jobs.db`) is created empty on first run. The server reloads itself when Python files change, so refreshing the page is enough to pick up edits.
+The database (`jobs.db`) is created on first run and loaded with the starter companies and searches. The server reloads itself when Python files change, so refreshing the page is enough to pick up edits.
 
 ## API quota
 
-JSearch's free plan has a small monthly allowance with a hard cap (no overage charges). Each search page (~10 jobs) uses one request; the header shows how many pages you've used this month. Company board checks on Greenhouse, Lever and Ashby don't use quota.
+JSearch's free plan has a small monthly allowance with a hard cap (no overage charges). Each search page (~10 jobs) uses one request; the header shows how many pages you've used this month. Direct careers-site checks don't use quota. **Check all** always checks the direct companies and asks before including the JSearch ones (yellow tag).
 
 ## Adding a company
 
-Click **+ Add** under Companies and paste the careers page URL. Board URLs are recognized automatically:
+Click **+ Add** under Companies and paste the careers page URL. These are recognized automatically:
 
 | Platform | Example URL |
 |---|---|
-| Greenhouse | `https://boards.greenhouse.io/stripe` or `https://job-boards.greenhouse.io/stripe` |
-| Lever | `https://jobs.lever.co/spotify` |
-| Ashby | `https://jobs.ashbyhq.com/ramp` |
+| Workday | `https://osu.wd1.myworkdayjobs.com/OSUCareers` |
+| Oracle | `https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs` |
+| UKG | `https://recruiting.ultipro.com/PAR1025PNATB/JobBoard/<board-id>/` |
+| ADP Workforce Now | `https://workforcenow.adp.com/...recruitment.html?cid=<cid>` |
+| Eightfold | `https://<company>.eightfold.ai/careers?domain=<company>.com` |
+| Rippling | `https://ats.rippling.com/joinroot/jobs` |
+| Greenhouse / Lever / Ashby | `boards.greenhouse.io/stripe`, `jobs.lever.co/spotify`, `jobs.ashbyhq.com/ramp` |
 
-Anything else (or no URL) uses JSearch. Title keywords and locations are comma-separated; remote jobs always pass the location filter.
+Many companies put their own domain in front (e.g. `careers.nationwide.com` is Workday underneath). For those, and for iCIMS/Jibe, Radancy and Phenom sites, pick the **Job board** type by hand and fill in the **Board ID** (the form shows the expected format). Anything else uses JSearch.
+
+**Title keywords** and **locations** are comma-separated. A job must have one of the keywords in its title; locations match anywhere in the job's location text ("dublin oh" matches "Dublin, Ohio" but not Dublin, Ireland). US-remote jobs always pass, and jobs listed only as "Multiple locations" are kept so you can look.
+
+These connectors call the same endpoints the companies' own search pages use; they aren't official APIs, so a redesign can break one. A failed check shows "couldn't check *company*" — switch that company to JSearch or fix its board ID.
 
 ## Command line
 

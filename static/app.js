@@ -87,6 +87,9 @@ async function loadMeta() {
     const meta = await api('/api/meta');
     state.statuses = meta.statuses;
     state.atsLabels = meta.ats_labels;
+    state.atsHints = meta.ats_token_hints;
+    state.priorities = meta.priorities;
+    state.companyDefaults = meta.company_defaults;
     renderStatusTabs(meta.status_counts);
     renderUsage(meta.pages_used_this_month);
     if (!meta.has_api_key) showMessage('No JSEARCH_API_KEY in .env, so searches will fail until it is added.', true);
@@ -232,11 +235,15 @@ async function loadCompanies() {
         return;
     }
     list.innerHTML = state.companies.map(c => {
-        const filters = [c.keywords, c.locations].filter(Boolean).join(' · ');
+        const bits = [
+            c.priority ? (state.priorities[c.priority] || `P${c.priority}`) : '',
+            c.rating ? `★ ${c.rating}` : '',
+            c.keywords || 'all openings',
+        ].filter(Boolean).join(' · ');
         return `
-        <li class="${c.id === state.companyId ? 'active' : ''}" onclick="filterByCompany(${c.id})">
-            <div class="saved-name">${esc(c.name)}<span class="ats-tag">${esc(state.atsLabels[c.ats] || c.ats)}</span></div>
-            <div class="saved-meta">${esc(filters || 'all openings')}<br>
+        <li class="${c.id === state.companyId ? 'active' : ''}" onclick="filterByCompany(${c.id})" title="${esc(c.notes || '')}">
+            <div class="saved-name">${esc(c.name)}<span class="ats-tag ${c.ats === 'search' ? 'quota' : ''}">${esc(state.atsLabels[c.ats] || c.ats)}</span></div>
+            <div class="saved-meta">${esc(bits)}<br>
                 ${c.job_count} job${c.job_count === 1 ? '' : 's'} · ${c.last_checked_at ? 'checked ' + esc(relativeDate(c.last_checked_at)) : 'never checked'}</div>
             <div class="saved-actions">
                 <button class="small" onclick="event.stopPropagation(); checkCompany(${c.id}, this)">Check</button>
@@ -256,15 +263,38 @@ function filterByCompany(companyId) {
 }
 
 function showCompanyForm(company = null) {
+    const defaults = state.companyDefaults || {};
+    const ats = document.getElementById('cAts');
+    ats.innerHTML = '<option value="">Auto-detect from URL</option>' + Object.entries(state.atsLabels)
+        .map(([key, label]) => `<option value="${esc(key)}">${esc(label)}${key === 'search' ? ' (uses API quota)' : ''}</option>`).join('');
+    const priority = document.getElementById('cPriority');
+    priority.innerHTML = '<option value="">—</option>' + Object.entries(state.priorities)
+        .map(([key, label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('');
+
     document.getElementById('cId').value = company ? company.id : '';
     document.getElementById('cName').value = company ? company.name : '';
     document.getElementById('cUrl').value = company ? (company.careers_url || '') : '';
-    document.getElementById('cKeywords').value = company ? (company.keywords || '') : '';
-    document.getElementById('cLocations').value = company ? (company.locations || '') : '';
+    ats.value = company ? company.ats : '';
+    document.getElementById('cToken').value = company ? (company.ats_token || '') : '';
+    priority.value = company && company.priority ? company.priority : '';
+    document.getElementById('cRating').value = company && company.rating ? company.rating : '';
+    document.getElementById('cKeywords').value = company ? (company.keywords || '') : (defaults.keywords || '');
+    document.getElementById('cLocations').value = company ? (company.locations || '') : (defaults.locations || '');
     document.getElementById('cNotes').value = company ? (company.notes || '') : '';
+    updateTokenHint();
     document.getElementById('cSaveBtn').textContent = company ? 'Save changes' : 'Add company';
     document.getElementById('companyForm').classList.remove('hidden');
     document.getElementById('cName').focus();
+}
+
+function updateTokenHint() {
+    const ats = document.getElementById('cAts').value;
+    const token = document.getElementById('cToken');
+    token.disabled = !ats || ats === 'search' || ats === 'amazon';
+    if (token.disabled && !ats) token.value = '';
+    document.getElementById('cTokenHint').textContent = ats
+        ? `Board ID: ${state.atsHints[ats] || ''}`
+        : 'Job board and board ID are filled in from the URL when you save.';
 }
 
 function hideCompanyForm() {
@@ -283,11 +313,13 @@ async function saveCompany(button) {
         keywords: document.getElementById('cKeywords').value.trim(),
         locations: document.getElementById('cLocations').value.trim(),
         notes: document.getElementById('cNotes').value.trim(),
+        priority: document.getElementById('cPriority').value,
+        rating: document.getElementById('cRating').value,
+        // Blank job board = detect it from the URL on the server.
+        ats: document.getElementById('cAts').value,
+        ats_token: document.getElementById('cToken').value.trim(),
     };
     if (!body.name) return showMessage('Enter a company name.', true);
-    // Re-detect the job board whenever the URL is saved.
-    body.ats = '';
-    body.ats_token = '';
     button.disabled = true;
     try {
         const company = await api(id ? `/api/companies/${id}` : '/api/companies', {
@@ -323,11 +355,16 @@ async function checkCompany(companyId, button) {
 
 async function checkAllCompanies(button) {
     if (state.companies.length === 0) return showMessage('Add a company first.', true);
-    const usesQuota = state.companies.filter(c => c.ats === 'search').length;
-    if (usesQuota && !confirm(`${usesQuota} of these companies use JSearch, which uses API quota (about 1 request each). Continue?`)) return;
+    // Direct career-site checks are free; JSearch ones cost a request each, so they're opt-in.
+    const quotaCompanies = state.companies.filter(c => c.ats === 'search');
+    const includeQuota = quotaCompanies.length > 0 && confirm(
+        `${state.companies.length - quotaCompanies.length} companies are checked directly on their career sites (free).\n\n` +
+        `${quotaCompanies.length} more can only be checked through JSearch, about 1 API request each.\n\n` +
+        `OK = check all of them   ·   Cancel = only the free ones`);
+    const toCheck = state.companies.filter(c => c.ats !== 'search' || includeQuota);
     await withBusy(button, async () => {
         let found = 0, added = 0, failed = [];
-        for (const c of state.companies) {
+        for (const c of toCheck) {
             button.textContent = `Checking ${c.name}...`;
             try {
                 const r = await api(`/api/companies/${c.id}/check`, { method: 'POST' });
@@ -342,7 +379,7 @@ async function checkAllCompanies(button) {
         state.searchId = null;
         state.status = 'new';
         await refreshAll();
-        showMessage(`Checked ${state.companies.length} companies: ${found} matching jobs, ${added} new.` +
+        showMessage(`Checked ${toCheck.length} companies: ${found} matching jobs, ${added} new.` +
             (failed.length ? ` Failed: ${failed.join('; ')}` : ''), failed.length > 0);
     });
 }

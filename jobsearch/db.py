@@ -8,8 +8,12 @@ from datetime import datetime, timezone
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB_PATH = os.path.join(REPO_DIR, "jobs.db")
+SEED_PATH = os.path.join(REPO_DIR, "seed", "seed.json")
 
 STATUSES = ["new", "interested", "applied", "interviewing", "offer", "rejected", "not_a_fit"]
+
+# Company priority, numbered as in the original Columbus spreadsheet (lower = more interesting).
+PRIORITIES = {1: "High", 2: "Medium", 4: "TBD – Med-Hi", 5: "TBD – Med", 6: "TBD – Low", 7: "Low"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS searches (
@@ -35,9 +39,16 @@ CREATE TABLE IF NOT EXISTS companies (
     ats_token       TEXT,
     keywords        TEXT,
     locations       TEXT,
+    priority        INTEGER,
+    rating          REAL,
     notes           TEXT,
     created_at      TEXT NOT NULL,
     last_checked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key             TEXT PRIMARY KEY,
+    value           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -106,9 +117,41 @@ def connect():
         conn.close()
 
 
-def init_db():
+def init_db(seed_path=SEED_PATH):
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+    seed_db(seed_path)
+
+
+def _migrate(conn):
+    """Add columns introduced after a database was first created."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(companies)")}
+    for name, decl in (("priority", "INTEGER"), ("rating", "REAL")):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE companies ADD COLUMN {name} {decl}")
+
+
+def seed_db(seed_path=SEED_PATH):
+    """Load the starter companies and saved searches once, on a brand-new database.
+
+    Runs only the first time (tracked in meta), so deleting seeded companies
+    later doesn't bring them back.
+    """
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM meta WHERE key = 'seeded'").fetchone():
+            return
+        has_data = conn.execute("SELECT (SELECT COUNT(*) FROM companies) + (SELECT COUNT(*) FROM searches)").fetchone()[0]
+        conn.execute("INSERT INTO meta (key, value) VALUES ('seeded', ?)", (now_iso(),))
+    if has_data or not seed_path or not os.path.exists(seed_path):
+        return
+    with open(seed_path, encoding="utf-8") as f:
+        seed = json.load(f)
+    defaults = seed.get("defaults", {})
+    for company in seed.get("companies", []):
+        add_company({**defaults, **company})
+    for search in seed.get("searches", []):
+        add_search(search)
 
 
 # --- searches ---------------------------------------------------------------
@@ -150,7 +193,17 @@ def delete_search(search_id):
 
 # --- companies --------------------------------------------------------------
 
-COMPANY_FIELDS = ("name", "careers_url", "ats", "ats_token", "keywords", "locations", "notes")
+COMPANY_FIELDS = ("name", "careers_url", "ats", "ats_token", "keywords", "locations", "priority", "rating", "notes")
+
+
+def company_defaults(seed_path=SEED_PATH):
+    """Keywords/locations to prefill when adding a company (from the seed file's defaults)."""
+    try:
+        with open(seed_path, encoding="utf-8") as f:
+            defaults = json.load(f).get("defaults", {})
+    except (OSError, ValueError):
+        defaults = {}
+    return {"keywords": defaults.get("keywords", ""), "locations": defaults.get("locations", "")}
 
 
 def list_companies():
@@ -158,7 +211,7 @@ def list_companies():
         rows = conn.execute("""
             SELECT c.*, COUNT(j.id) AS job_count
             FROM companies c LEFT JOIN jobs j ON j.company_id = c.id
-            GROUP BY c.id ORDER BY c.name COLLATE NOCASE
+            GROUP BY c.id ORDER BY COALESCE(c.priority, 99), c.name COLLATE NOCASE
         """).fetchall()
     return [dict(r) for r in rows]
 

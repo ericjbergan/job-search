@@ -21,7 +21,7 @@
                 <h2>New search</h2>
                 <form id="searchForm" onsubmit="return false;">
                     <label>Search for
-                        <input id="fQuery" placeholder="e.g. senior java developer" required>
+                        <input id="fQuery" placeholder="e.g. business analyst" required>
                     </label>
                     <label>Location
                         <input id="fLocation" placeholder="e.g. Chicago, IL (optional)">
@@ -83,9 +83,26 @@
                         <input id="cName" placeholder="e.g. Stripe" required>
                     </label>
                     <label>Careers page URL
-                        <input id="cUrl" placeholder="e.g. https://boards.greenhouse.io/stripe">
-                        <span class="hint">Greenhouse, Lever and Ashby boards are read directly (free). Anything else uses JSearch.</span>
+                        <input id="cUrl" placeholder="e.g. https://osu.wd1.myworkdayjobs.com/OSUCareers">
+                        <span class="hint">Workday, Oracle, UKG, ADP, Eightfold, Rippling, Greenhouse, Lever and Ashby URLs are recognized automatically and searched directly (free).</span>
                     </label>
+                    <div class="row">
+                        <label>Job board
+                            <select id="cAts" onchange="updateTokenHint()"></select>
+                        </label>
+                        <label>Board ID
+                            <input id="cToken" placeholder="auto">
+                        </label>
+                    </div>
+                    <span class="hint" id="cTokenHint"></span>
+                    <div class="row">
+                        <label>Priority
+                            <select id="cPriority"></select>
+                        </label>
+                        <label>Glassdoor rating
+                            <input id="cRating" type="number" min="1" max="5" step="0.1" placeholder="e.g. 3.8">
+                        </label>
+                    </div>
                     <label>Title keywords (comma-separated)
                         <input id="cKeywords" placeholder="e.g. java, backend, software engineer">
                     </label>

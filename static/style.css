@@ -180,3 +180,5 @@ a.apply { font-size: 14px; }
 .company-form { border: 1px solid #e3e6ea; border-radius: 6px; padding: 12px; margin-bottom: 12px; background: #fafbfc; }
 .hint { display: block; font-size: 11px; color: #888; margin-top: 3px; }
 .ats-tag { font-size: 11px; color: #555; background: #e3e6ea; border-radius: 8px; padding: 1px 6px; margin-left: 4px; font-weight: normal; }
+.ats-tag.quota { background: #fff3cd; color: #856404; }
+input:disabled { background: #f0f0f0; color: #999; }
