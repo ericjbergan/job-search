@@ -82,6 +82,16 @@ function salaryText(job) {
     return range + period;
 }
 
+const WORK_MODE_LABELS = { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' };
+
+// Work style on the job card. A "?" means it was read from the description, not a field on the listing.
+function workModeBadge(job) {
+    if (!job.work_mode) return '<div class="work-mode none">work style not stated</div>';
+    const guessed = job.work_mode_source === 'description';
+    const tip = guessed ? 'Mentioned in the description; check the listing to confirm' : 'Listed on the posting';
+    return `<div class="work-mode ${esc(job.work_mode)}" title="${tip}">${esc(WORK_MODE_LABELS[job.work_mode] || job.work_mode)}${guessed ? '?' : ''}</div>`;
+}
+
 function shortDate(iso) {
     return iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 }
@@ -418,7 +428,8 @@ async function loadJobs() {
     if (state.companyId) params.append('company_id', state.companyId);
     const text = document.getElementById('textFilter').value.trim();
     if (text) params.append('q', text);
-    if (document.getElementById('remoteFilter').checked) params.append('remote', '1');
+    const workMode = document.getElementById('workModeFilter').value;
+    if (workMode) params.append('work_mode', workMode);
     if (document.getElementById('hideNotFit').checked) params.append('hide_not_fit', '1');
     params.append('sort', document.getElementById('sortJobs').value);
 
@@ -457,7 +468,6 @@ function renderJobSummary(job) {
             <div>
                 <div class="job-title">${esc(job.title)}</div>
                 <div class="job-sub">${esc(job.company || 'Unknown company')} · ${esc(job.location || 'Location not listed')}</div>
-                ${job.is_remote ? '<span class="badge remote">Remote</span> ' : ''}
                 ${job.employment_type ? `<span class="badge">${esc(job.employment_type)}</span> ` : ''}
                 ${job.req_number ? `<span class="badge req" title="Requisition / posting number">Req ${esc(job.req_number)}</span> ` : ''}
                 <span class="badge">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}</span>
@@ -470,7 +480,7 @@ function renderJobSummary(job) {
                 ${salary ? `<div class="salary" title="${esc(job.salary_text || '')}">${esc(salary)}</div>` : '<div class="no-pay">pay not listed</div>'}
                 <div>${job.posted_at ? 'posted ' + esc(shortDate(job.posted_at)) : ''}</div>
                 ${closes ? `<div class="${closes.startsWith('closed') ? 'closed' : 'closes'}">${esc(closes)}</div>` : ''}
-                <div>${esc(job.publisher || '')}</div>
+                ${workModeBadge(job)}
             </div>
         </div>
         <div class="job-detail hidden" id="detail-${job.id}"></div>
@@ -502,7 +512,7 @@ async function openJob(jobId, closeOthers) {
                     ${state.statuses.map(s => `<option value="${s}" ${s === job.status ? 'selected' : ''}>${esc(STATUS_LABELS[s] || s)}</option>`).join('')}
                 </select>
             </label>
-            ${apply ? `<a class="apply" href="${apply}" target="_blank" rel="noopener noreferrer">Open listing ↗</a>` : ''}
+            ${apply ? `<a class="apply" href="${apply}" target="_blank" rel="noopener noreferrer">Go to listing ↗</a>` : ''}
         </div>
         <div class="notes-row">
             <label>Notes
@@ -517,6 +527,7 @@ async function openJob(jobId, closeOthers) {
             ${job.closes_at ? `${esc(closesText(job.closes_at))} · ` : ''}
             ${job.applied_at ? `Applied ${esc(shortDate(job.applied_at))} · ` : ''}
             ${job.salary_text ? `Pay as posted: “${esc(job.salary_text)}” · ` : ''}
+            ${job.publisher ? `Found via ${esc(job.publisher)} · ` : ''}
             First saved ${esc(relativeDate(job.first_seen_at))} · last seen in results ${esc(relativeDate(job.last_seen_at))}
         </div>
     `;

@@ -192,14 +192,15 @@ def _workday_posted(text):
 
 
 def _job(id_, title, company, location=None, remote=False, posted=None, link=None,
-         publisher=None, description=None, employment_type=None, salary=None, req=None, closes=None):
+         publisher=None, description=None, employment_type=None, salary=None, req=None, closes=None,
+         work_mode=None):
     return {
         "job_id": id_, "job_title": " ".join((title or "").split()), "employer_name": company,
         "job_location": location, "job_is_remote": bool(remote) or "remote" in norm(location),
         "job_employment_type": employment_type, "job_posted_at_datetime_utc": posted,
         "job_apply_link": link, "job_publisher": publisher, "job_description": description,
         "job_salary_string": salary, "job_req_id": str(req) if req not in (None, "") else None,
-        "job_closes_at": closes,
+        "job_closes_at": closes, "job_work_mode": work_mode,
     }
 
 
@@ -228,6 +229,8 @@ def _apply_jsonld(job, item):
         job["job_posted_at_datetime_utc"] = item["datePosted"]
     if item.get("validThrough"):
         job["job_closes_at"] = item["validThrough"]
+    if "telecommute" in norm(str(item.get("jobLocationType"))):
+        job["job_work_mode"] = "remote"
     ident = item.get("identifier")
     if isinstance(ident, dict) and ident.get("value"):
         job["job_req_id"] = str(ident["value"])
@@ -360,6 +363,7 @@ def fetch_lever(token, company_name, query=None, locations=None):
         ]))
         jobs.append(_job(f"lever:{token}:{j['id']}", j.get("text"), company_name, location,
                          remote=j.get("workplaceType") == "remote", posted=_ms_to_iso(j.get("createdAt")),
+                         work_mode=j.get("workplaceType"),
                          link=j.get("hostedUrl"), publisher="Lever", description=desc,
                          employment_type=cats.get("commitment")))
     return jobs
@@ -376,7 +380,8 @@ def fetch_ashby(token, company_name, query=None, locations=None):
         jobs.append(_job(f"ashby:{token}:{j['id']}", j.get("title"), company_name, j.get("location"),
                          remote=j.get("isRemote"), posted=j.get("publishedAt"), link=j.get("jobUrl"),
                          publisher="Ashby", description=j.get("descriptionPlain") or html_to_text(j.get("descriptionHtml")),
-                         employment_type=j.get("employmentType"), salary=comp))
+                         employment_type=j.get("employmentType"), salary=comp,
+                         work_mode=j.get("workplaceType")))
     return jobs
 
 
@@ -390,6 +395,7 @@ def fetch_rippling(token, company_name, query=None, locations=None):
             jobs.append(_job(f"rippling:{token}:{j['id']}", j.get("name"), company_name,
                              "; ".join(l.get("name", "") for l in locs),
                              remote=any(l.get("workplaceType") == "REMOTE" for l in locs),
+                             work_mode=next((l.get("workplaceType") for l in locs if l.get("workplaceType")), None),
                              link=j.get("url"), publisher="Rippling"))
         page += 1
         if page >= (data.get("totalPages") or 0):
@@ -448,7 +454,7 @@ def fetch_workday(token, company_name, query, locations=None):
         job = _job(f"workday:{tenant}:{path.rsplit('_', 1)[-1] or path}", p.get("title"), company_name,
                    p.get("locationsText"), posted=_workday_posted(p.get("postedOn")),
                    link=f"https://{host}/{site}{path}", publisher="Workday",
-                   req=(p.get("bulletFields") or [None])[0])
+                   req=(p.get("bulletFields") or [None])[0], work_mode=p.get("remoteType"))
         job["_enrich"] = (workday_details, (base, path))
         jobs.append(job)
     return jobs
@@ -497,6 +503,8 @@ def workday_details(job, base, path):
         job["job_apply_link"] = info["externalUrl"]
     if info.get("jobReqId"):
         job["job_req_id"] = info["jobReqId"]
+    if info.get("remoteType"):
+        job["job_work_mode"] = info["remoteType"]
     if info.get("endDate"):
         job["job_closes_at"] = f"{info['endDate']}T00:00:00+00:00"
 
@@ -534,6 +542,7 @@ def fetch_oracle(token, company_name, query, locations=None):
                 job = _job(f"oracle:{host.split('.')[0]}:{r['Id']}", r.get("Title"), company_name,
                            "; ".join(filter(None, locs)), remote=norm(r.get("WorkplaceType")) == "remote",
                            posted=r.get("PostedDate"), publisher="Oracle", req=r["Id"],
+                           work_mode=r.get("WorkplaceType") or None,
                            closes=r.get("PostingEndDate"),
                            link=f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}/job/{r['Id']}",
                            description=r.get("ShortDescriptionStr"))
@@ -568,7 +577,8 @@ def fetch_ukg(token, company_name, query, locations=None):
             link = f"https://{host}/{tenant}/JobBoard/{board}/OpportunityDetail?opportunityId={o['Id']}"
             job = _job(f"ukg:{tenant}:{o['Id']}", o.get("Title"), company_name, "; ".join(filter(None, locs)),
                        posted=o.get("PostedDate"), publisher="UKG", description=o.get("BriefDescription"), link=link,
-                       employment_type="Full time" if o.get("FullTime") else "Part time", req=o.get("RequisitionNumber"))
+                       employment_type="Full time" if o.get("FullTime") else "Part time", req=o.get("RequisitionNumber"),
+                       work_mode="remote" if o.get("JobLocationType") == 2 else None)
             job["_enrich"] = (ukg_details, (link,))
             jobs.append(job)
         skip += len(batch)
@@ -592,7 +602,7 @@ def fetch_eightfold(token, company_name, query, locations=None):
                              posted=_ms_to_iso(p.get("t_create")), publisher="Eightfold",
                              link=p.get("canonicalPositionUrl") or f"https://{host}/careers/job/{p['id']}",
                              description=html_to_text(p.get("job_description")),
-                             req=p.get("display_job_id")))
+                             req=p.get("display_job_id"), work_mode=p.get("work_location_option")))
         start += len(batch)
         if len(batch) < 10 or start >= (data.get("count") or 0):
             break

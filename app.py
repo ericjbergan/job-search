@@ -207,6 +207,7 @@ def api_list_jobs():
         remote_only=request.args.get("remote") == "1",
         hide_not_fit=request.args.get("hide_not_fit") == "1",
         sort=request.args.get("sort") or "found",
+        work_mode=request.args.get("work_mode") or None,
     ))
 
 

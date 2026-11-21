@@ -310,3 +310,40 @@ class PayAndFlagTests(FreshDbTest):
         cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
         conn.close()
         self.assertTrue({"req_number", "closes_at", "applied_at"} <= cols)
+
+
+class WorkModeTests(FreshDbTest):
+    def test_normalize_platform_values(self):
+        from jobsearch.workmode import normalize
+        for raw, mode in [("Hybrid", "hybrid"), ("REMOTE", "remote"), ("Office", "onsite"), ("OnSite", "onsite"),
+                          ("ON_SITE", "onsite"), ("TELECOMMUTE", "remote"), ("Flexible", "hybrid"), ("", None), (None, None)]:
+            self.assertEqual(normalize(raw), mode, raw)
+
+    def test_detect_sources(self):
+        from jobsearch.workmode import detect
+        self.assertEqual(detect(listed="Hybrid"), ("hybrid", "listed"))
+        self.assertEqual(detect(location="Ohio Remote"), ("remote", "listed"))
+        self.assertEqual(detect(title="Business Analyst (Hybrid)"), ("hybrid", "listed"))
+        self.assertEqual(detect(description="This is a hybrid role, 3 days in office."), ("hybrid", "description"))
+        self.assertEqual(detect(description="This position is fully remote."), ("remote", "description"))
+        self.assertEqual(detect(description="Must work onsite at our Dublin campus."), ("onsite", "description"))
+        # Benefits boilerplate shouldn't count as remote.
+        self.assertEqual(detect(description="We offer a remote learning stipend."), (None, None))
+        self.assertEqual(detect(description="Great team. #LI-Onsite"), ("onsite", "listed"))
+        self.assertEqual(detect(description="Apply today #LI-HYBRID #LI-JS1"), ("hybrid", "listed"))
+        self.assertEqual(detect(description="Benefits include on-site health and wellness centers."), (None, None))
+
+    def test_saved_and_filterable(self):
+        base = {"employer_name": "Acme", "job_title": "Business Analyst"}
+        db.save_results([
+            {**base, "job_id": "1", "job_work_mode": "Hybrid"},
+            {**base, "job_id": "2", "job_location": "Ohio Remote"},
+            {**base, "job_id": "3", "job_description": "This role is onsite in Columbus. Must work onsite daily."},
+            {**base, "job_id": "4"},
+        ])
+        got = {j["work_mode"] for j in self.client.get("/api/jobs").get_json()}
+        self.assertEqual(got, {"hybrid", "remote", "onsite", None})
+        for mode, expect in [("hybrid", 1), ("remote", 1), ("onsite", 1), ("unknown", 1)]:
+            self.assertEqual(len(self.client.get(f"/api/jobs?work_mode={mode}").get_json()), expect, mode)
+        onsite = self.client.get("/api/jobs?work_mode=onsite").get_json()[0]
+        self.assertEqual(onsite["work_mode_source"], "description")

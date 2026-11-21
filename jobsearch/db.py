@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from jobsearch import pay
+from jobsearch import pay, workmode
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB_PATH = os.path.join(REPO_DIR, "jobs.db")
@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     salary_text     TEXT,
     req_number      TEXT,
     closes_at       TEXT,
+    work_mode       TEXT,
+    work_mode_source TEXT,
     apply_link      TEXT,
     publisher       TEXT,
     description     TEXT,
@@ -133,7 +135,8 @@ def _migrate(conn):
     """Add columns introduced after a database was first created."""
     added = {
         "companies": (("priority", "INTEGER"), ("rating", "REAL")),
-        "jobs": (("req_number", "TEXT"), ("closes_at", "TEXT"), ("applied_at", "TEXT")),
+        "jobs": (("req_number", "TEXT"), ("closes_at", "TEXT"), ("applied_at", "TEXT"),
+                 ("work_mode", "TEXT"), ("work_mode_source", "TEXT")),
     }
     for table, columns in added.items():
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -282,6 +285,9 @@ def _job_values(job):
         if found:
             salary_min, salary_max, salary_period = found["min"], found["max"], found["period"]
             salary_text = salary_text or found["text"]
+    mode, mode_source = workmode.detect(
+        listed=job.get("job_work_mode"), location=location, title=job.get("job_title"),
+        description=job.get("job_description"), is_remote=job.get("job_is_remote"))
     return {
         "job_id": job["job_id"],
         "title": job.get("job_title") or "(untitled)",
@@ -296,6 +302,8 @@ def _job_values(job):
         "salary_text": salary_text,
         "req_number": job.get("job_req_id"),
         "closes_at": job.get("job_closes_at") or job.get("job_offer_expiration_datetime_utc"),
+        "work_mode": mode,
+        "work_mode_source": mode_source,
         "apply_link": job.get("job_apply_link"),
         "publisher": job.get("job_publisher"),
         "description": job.get("job_description"),
@@ -324,12 +332,14 @@ def save_results(results, search_id=None, company_id=None):
                 conn.execute("""
                     UPDATE jobs SET title=?, company=?, location=?, is_remote=?, employment_type=?,
                         posted_at=?, salary_min=?, salary_max=?, salary_period=?, salary_text=?,
-                        req_number=?, closes_at=?, apply_link=?, publisher=?, description=?,
+                        req_number=?, closes_at=?, work_mode=?, work_mode_source=?,
+                        apply_link=?, publisher=?, description=?,
                         raw_json=?, last_seen_at=?
                     WHERE id=?
                 """, (v["title"], v["company"], v["location"], v["is_remote"], v["employment_type"],
                       v["posted_at"], v["salary_min"], v["salary_max"], v["salary_period"],
-                      v["salary_text"], v["req_number"], v["closes_at"], v["apply_link"],
+                      v["salary_text"], v["req_number"], v["closes_at"], v["work_mode"],
+                      v["work_mode_source"], v["apply_link"],
                       v["publisher"], v["description"], v["raw_json"], ts, row_id))
                 if company_id is not None:
                     conn.execute("UPDATE jobs SET company_id = ? WHERE id = ?", (company_id, row_id))
@@ -367,10 +377,10 @@ JOB_SORTS = {
 
 
 def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_only=False,
-              hide_not_fit=False, sort="found"):
+              hide_not_fit=False, sort="found", work_mode=None):
     sql = ["SELECT j.id, j.company_id, j.title, j.company, j.location, j.is_remote, j.employment_type,",
            "j.posted_at, j.salary_min, j.salary_max, j.salary_period, j.salary_text,",
-           "j.req_number, j.closes_at, j.applied_at,",
+           "j.req_number, j.closes_at, j.applied_at, j.work_mode, j.work_mode_source,",
            "j.apply_link, j.publisher, j.status, j.notes, j.first_seen_at, j.last_seen_at",
            "FROM jobs j"]
     where, args = [], []
@@ -385,7 +395,12 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
         where.append("j.status = ?")
         args.append(status)
     if remote_only:
-        where.append("j.is_remote = 1")
+        where.append("(j.is_remote = 1 OR j.work_mode = 'remote')")
+    if work_mode == "unknown":
+        where.append("j.work_mode IS NULL")
+    elif work_mode in workmode.MODES:
+        where.append("j.work_mode = ?")
+        args.append(work_mode)
     if hide_not_fit and status != "not_a_fit":
         where.append("j.status != 'not_a_fit'")
     if text:

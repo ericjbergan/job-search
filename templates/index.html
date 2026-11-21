@@ -128,7 +128,13 @@
                 <div id="statusTabs" class="status-tabs"></div>
                 <div class="filter-row">
                     <input id="textFilter" placeholder="Filter by title, company, description, notes" oninput="debouncedLoadJobs()">
-                    <label class="check"><input type="checkbox" id="remoteFilter" onchange="loadJobs()"> Remote only</label>
+                    <select id="workModeFilter" onchange="loadJobs()" title="Work style">
+                        <option value="">Any work style</option>
+                        <option value="remote">Remote</option>
+                        <option value="hybrid">Hybrid</option>
+                        <option value="onsite">On-site</option>
+                        <option value="unknown">Not stated</option>
+                    </select>
                     <label class="check"><input type="checkbox" id="hideNotFit" onchange="loadJobs()" checked> Hide not a fit</label>
                     <select id="sortJobs" onchange="loadJobs()" title="Sort jobs">
                         <option value="found">Newest found</option>
