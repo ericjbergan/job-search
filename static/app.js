@@ -104,10 +104,10 @@ function closesText(iso) {
     return days <= 14 ? `closes in ${days} day${days === 1 ? '' : 's'}` : `closes ${shortDate(iso)}`;
 }
 
-// One-click flags on the job card. Clicking an active flag clears it back to "interested".
+// One-click flags on the job card (Interested / Applied / Not a fit). Clicking the active one clears it back to "new".
 async function toggleFlag(event, jobId, status, current) {
     event.stopPropagation();
-    await updateJob(jobId, { status: current === status ? 'interested' : status });
+    await updateJob(jobId, { status: current === status ? 'new' : status });
 }
 
 // --- meta / usage ------------------------------------------------------------
@@ -461,7 +461,7 @@ async function loadJobs() {
 function renderJobSummary(job) {
     const salary = salaryText(job);
     const closes = closesText(job.closes_at);
-    const applied = job.status === 'applied', notFit = job.status === 'not_a_fit';
+    const interested = job.status === 'interested', applied = job.status === 'applied', notFit = job.status === 'not_a_fit';
     return `
     <div class="job status-${esc(job.status)}" id="job-${job.id}">
         <div class="job-summary" onclick="toggleJob(${job.id})">
@@ -472,6 +472,7 @@ function renderJobSummary(job) {
                 ${job.req_number ? `<span class="badge req" title="Requisition / posting number">Req ${esc(job.req_number)}</span> ` : ''}
                 <span class="badge">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}</span>
                 <div class="flag-buttons">
+                    <button class="flag ${interested ? 'on interested' : ''}" onclick="toggleFlag(event, ${job.id}, 'interested', '${esc(job.status)}')">★ Interested</button>
                     <button class="flag ${applied ? 'on applied' : ''}" onclick="toggleFlag(event, ${job.id}, 'applied', '${esc(job.status)}')">✓ Applied</button>
                     <button class="flag ${notFit ? 'on not-fit' : ''}" onclick="toggleFlag(event, ${job.id}, 'not_a_fit', '${esc(job.status)}')">✕ Not a fit</button>
                 </div>

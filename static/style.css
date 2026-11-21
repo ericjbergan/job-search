@@ -204,3 +204,4 @@ button.flag.on.not-fit { background: #6c757d; border-color: #6c757d; color: #fff
 .work-mode.hybrid { background: #e8e1f5; color: #4b2c83; }
 .work-mode.onsite { background: #fde2cf; color: #8a4510; }
 .work-mode.none { color: #aaa; font-weight: normal; padding: 0; }
+button.flag.on.interested { background: #f0ad4e; border-color: #f0ad4e; color: #fff; }
