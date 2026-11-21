@@ -70,15 +70,34 @@ function relativeDate(iso) {
     return new Date(iso).toLocaleDateString();
 }
 
+// Pay from the parsed numbers when there are any; otherwise the site's own wording.
 function salaryText(job) {
-    if (job.salary_text) return job.salary_text;
-    if (!job.salary_min && !job.salary_max) return '';
-    const fmt = n => n >= 1000 ? `$${Math.round(n / 1000)}k` : `$${n}`;
+    if (!job.salary_min && !job.salary_max) return job.salary_text || '';
+    const hourly = job.salary_period === 'HOUR';
+    const fmt = n => hourly || n < 1000 ? `$${n.toFixed(2)}` : `$${(n / 1000).toFixed(n % 1000 ? 1 : 0)}k`;
     const range = job.salary_min && job.salary_max && job.salary_min !== job.salary_max
         ? `${fmt(job.salary_min)}–${fmt(job.salary_max)}`
         : fmt(job.salary_min || job.salary_max);
     const period = { YEAR: '/yr', HOUR: '/hr', MONTH: '/mo' }[job.salary_period] || '';
     return range + period;
+}
+
+function shortDate(iso) {
+    return iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+}
+
+function closesText(iso) {
+    if (!iso) return '';
+    const days = Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
+    if (days < 0) return `closed ${shortDate(iso)}`;
+    if (days === 0) return 'closes today';
+    return days <= 14 ? `closes in ${days} day${days === 1 ? '' : 's'}` : `closes ${shortDate(iso)}`;
+}
+
+// One-click flags on the job card. Clicking an active flag clears it back to "interested".
+async function toggleFlag(event, jobId, status, current) {
+    event.stopPropagation();
+    await updateJob(jobId, { status: current === status ? 'interested' : status });
 }
 
 // --- meta / usage ------------------------------------------------------------
@@ -400,6 +419,8 @@ async function loadJobs() {
     const text = document.getElementById('textFilter').value.trim();
     if (text) params.append('q', text);
     if (document.getElementById('remoteFilter').checked) params.append('remote', '1');
+    if (document.getElementById('hideNotFit').checked) params.append('hide_not_fit', '1');
+    params.append('sort', document.getElementById('sortJobs').value);
 
     const chip = document.getElementById('searchFilterChip');
     const search = state.searches.find(s => s.id === state.searchId);
@@ -428,6 +449,8 @@ async function loadJobs() {
 
 function renderJobSummary(job) {
     const salary = salaryText(job);
+    const closes = closesText(job.closes_at);
+    const applied = job.status === 'applied', notFit = job.status === 'not_a_fit';
     return `
     <div class="job status-${esc(job.status)}" id="job-${job.id}">
         <div class="job-summary" onclick="toggleJob(${job.id})">
@@ -436,11 +459,17 @@ function renderJobSummary(job) {
                 <div class="job-sub">${esc(job.company || 'Unknown company')} · ${esc(job.location || 'Location not listed')}</div>
                 ${job.is_remote ? '<span class="badge remote">Remote</span> ' : ''}
                 ${job.employment_type ? `<span class="badge">${esc(job.employment_type)}</span> ` : ''}
-                <span class="badge">${esc(STATUS_LABELS[job.status] || job.status)}</span>
+                ${job.req_number ? `<span class="badge req" title="Requisition / posting number">Req ${esc(job.req_number)}</span> ` : ''}
+                <span class="badge">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}</span>
+                <div class="flag-buttons">
+                    <button class="flag ${applied ? 'on applied' : ''}" onclick="toggleFlag(event, ${job.id}, 'applied', '${esc(job.status)}')">✓ Applied</button>
+                    <button class="flag ${notFit ? 'on not-fit' : ''}" onclick="toggleFlag(event, ${job.id}, 'not_a_fit', '${esc(job.status)}')">✕ Not a fit</button>
+                </div>
             </div>
             <div class="job-side">
-                ${salary ? `<div class="salary">${esc(salary)}</div>` : ''}
-                <div>${job.posted_at ? 'posted ' + esc(relativeDate(job.posted_at)) : ''}</div>
+                ${salary ? `<div class="salary" title="${esc(job.salary_text || '')}">${esc(salary)}</div>` : '<div class="no-pay">pay not listed</div>'}
+                <div>${job.posted_at ? 'posted ' + esc(shortDate(job.posted_at)) : ''}</div>
+                ${closes ? `<div class="${closes.startsWith('closed') ? 'closed' : 'closes'}">${esc(closes)}</div>` : ''}
                 <div>${esc(job.publisher || '')}</div>
             </div>
         </div>
@@ -482,7 +511,14 @@ async function openJob(jobId, closeOthers) {
             <button class="small" onclick="updateJob(${job.id}, { notes: document.getElementById('notes-${job.id}').value })">Save notes</button>
         </div>
         <div class="description">${esc(job.description || 'No description provided.')}</div>
-        <div class="detail-meta">First saved ${esc(relativeDate(job.first_seen_at))} · last seen in results ${esc(relativeDate(job.last_seen_at))}</div>
+        <div class="detail-meta">
+            ${job.req_number ? `Req # ${esc(job.req_number)} · ` : ''}
+            ${job.posted_at ? `Posted ${esc(shortDate(job.posted_at))} · ` : ''}
+            ${job.closes_at ? `${esc(closesText(job.closes_at))} · ` : ''}
+            ${job.applied_at ? `Applied ${esc(shortDate(job.applied_at))} · ` : ''}
+            ${job.salary_text ? `Pay as posted: “${esc(job.salary_text)}” · ` : ''}
+            First saved ${esc(relativeDate(job.first_seen_at))} · last seen in results ${esc(relativeDate(job.last_seen_at))}
+        </div>
     `;
 }
 

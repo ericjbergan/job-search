@@ -5,6 +5,7 @@ No network: JSearch and job-board calls are replaced with fixtures.
 
 import json
 import shutil
+import sqlite3
 import subprocess
 import os
 import tempfile
@@ -233,3 +234,79 @@ class SeedAndDetectTests(FreshDbTest):
         self.assertEqual(bad.status_code, 400)
         no_token = self.client.post("/api/companies", json={"name": "NoTok", "ats": "jibe"})
         self.assertEqual(no_token.status_code, 400)
+
+
+class PayAndFlagTests(FreshDbTest):
+    def test_parse_pay(self):
+        from jobsearch.pay import parse_pay
+        cases = {
+            "The base pay range for this position is $87,069 - $124,385 plus bonus": (87069, 124385, "YEAR"),
+            "$112,800.00 - $180,200.00 annually": (112800, 180200, "YEAR"),
+            "Hourly range $30.20 - $48.20 hourly": (30.2, 48.2, "HOUR"),
+            "Salary: $95K – $120K": (95000, 120000, "YEAR"),
+            "Earn $32.50 per hour": (32.5, 32.5, "HOUR"),
+        }
+        for text, expected in cases.items():
+            p = parse_pay(text)
+            self.assertEqual((p["min"], p["max"], p["period"]), expected, text)
+        for text in ("401(k) with $5,000 sign-on bonus", "revenue of $3 - $5 billion", "", None):
+            self.assertIsNone(parse_pay(text), text)
+
+    def test_pay_req_and_closing_saved_from_description(self):
+        job = {"job_id": "workday:x:1", "job_title": "Business Analyst", "employer_name": "Acme",
+               "job_description": "Pay range: $70,000 - $90,000 annually.", "job_req_id": "R123",
+               "job_closes_at": "2026-12-01T00:00:00+00:00"}
+        db.save_results([job])
+        saved = db.list_jobs()[0]
+        self.assertEqual((saved["salary_min"], saved["salary_max"], saved["salary_period"]), (70000, 90000, "YEAR"))
+        self.assertEqual((saved["req_number"], saved["closes_at"][:10]), ("R123", "2026-12-01"))
+        self.assertEqual(len(db.list_jobs(text="R123")), 1)
+
+    def test_applied_and_not_a_fit_flags(self):
+        db.save_results(sample_results()[:3])
+        a, b, c = [j["id"] for j in db.list_jobs()]
+        self.client.patch(f"/api/jobs/{a}", json={"status": "applied"})
+        self.assertIsNotNone(db.get_job(a)["applied_at"])
+        self.client.patch(f"/api/jobs/{a}", json={"status": "interested"})
+        self.assertIsNone(db.get_job(a)["applied_at"])
+
+        self.client.patch(f"/api/jobs/{b}", json={"status": "not_a_fit"})
+        shown = [j["id"] for j in self.client.get("/api/jobs?hide_not_fit=1").get_json()]
+        self.assertNotIn(b, shown)
+        self.assertEqual(len(shown), 2)
+        only = self.client.get("/api/jobs?hide_not_fit=1&status=not_a_fit").get_json()
+        self.assertEqual([j["id"] for j in only], [b])
+        # Re-running the search must not undo the flag.
+        db.save_results(sample_results()[:3])
+        self.assertEqual(db.get_job(b)["status"], "not_a_fit")
+
+    def test_sort_by_pay_mixes_hourly_and_yearly(self):
+        base = {"employer_name": "Acme", "job_title": "Business Analyst"}
+        db.save_results([
+            {**base, "job_id": "1", "job_min_salary": 60000, "job_max_salary": 70000, "job_salary_period": "YEAR"},
+            {**base, "job_id": "2", "job_min_salary": 50, "job_max_salary": 60, "job_salary_period": "HOUR"},  # ~$125k
+            {**base, "job_id": "3"},
+        ])
+        order = [j["salary_max"] for j in self.client.get("/api/jobs?sort=pay").get_json()]
+        self.assertEqual(order, [60, 70000, None])
+
+    def test_old_database_gets_new_columns(self):
+        os.remove(os.environ["JOBSEARCH_DB"])
+        conn = sqlite3.connect(os.environ["JOBSEARCH_DB"])
+        conn.executescript("""
+            CREATE TABLE companies (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, careers_url TEXT,
+                ats TEXT NOT NULL DEFAULT 'search', ats_token TEXT, keywords TEXT, locations TEXT, notes TEXT,
+                created_at TEXT NOT NULL, last_checked_at TEXT);
+            CREATE TABLE jobs (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL UNIQUE, company_id INTEGER,
+                title TEXT NOT NULL, company TEXT, location TEXT, is_remote INTEGER NOT NULL DEFAULT 0,
+                employment_type TEXT, posted_at TEXT, salary_min REAL, salary_max REAL, salary_period TEXT,
+                salary_text TEXT, apply_link TEXT, publisher TEXT, description TEXT,
+                status TEXT NOT NULL DEFAULT 'new', notes TEXT, first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL, raw_json TEXT);
+        """)
+        conn.close()
+        db.init_db(seed_path=None)
+        conn = sqlite3.connect(os.environ["JOBSEARCH_DB"])
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+        conn.close()
+        self.assertTrue({"req_number", "closes_at", "applied_at"} <= cols)

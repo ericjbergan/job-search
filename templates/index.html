@@ -129,6 +129,14 @@
                 <div class="filter-row">
                     <input id="textFilter" placeholder="Filter by title, company, description, notes" oninput="debouncedLoadJobs()">
                     <label class="check"><input type="checkbox" id="remoteFilter" onchange="loadJobs()"> Remote only</label>
+                    <label class="check"><input type="checkbox" id="hideNotFit" onchange="loadJobs()" checked> Hide not a fit</label>
+                    <select id="sortJobs" onchange="loadJobs()" title="Sort jobs">
+                        <option value="found">Newest found</option>
+                        <option value="posted">Newest posted</option>
+                        <option value="pay">Highest pay</option>
+                        <option value="closes">Closing soonest</option>
+                        <option value="company">Company</option>
+                    </select>
                     <span id="searchFilterChip" class="chip hidden"></span>
                 </div>
             </div>

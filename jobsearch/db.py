@@ -6,6 +6,8 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+from jobsearch import pay
+
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB_PATH = os.path.join(REPO_DIR, "jobs.db")
 SEED_PATH = os.path.join(REPO_DIR, "seed", "seed.json")
@@ -65,10 +67,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     salary_max      REAL,
     salary_period   TEXT,
     salary_text     TEXT,
+    req_number      TEXT,
+    closes_at       TEXT,
     apply_link      TEXT,
     publisher       TEXT,
     description     TEXT,
     status          TEXT NOT NULL DEFAULT 'new',
+    applied_at      TEXT,
     notes           TEXT,
     first_seen_at   TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,
@@ -126,10 +131,15 @@ def init_db(seed_path=SEED_PATH):
 
 def _migrate(conn):
     """Add columns introduced after a database was first created."""
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(companies)")}
-    for name, decl in (("priority", "INTEGER"), ("rating", "REAL")):
-        if name not in cols:
-            conn.execute(f"ALTER TABLE companies ADD COLUMN {name} {decl}")
+    added = {
+        "companies": (("priority", "INTEGER"), ("rating", "REAL")),
+        "jobs": (("req_number", "TEXT"), ("closes_at", "TEXT"), ("applied_at", "TEXT")),
+    }
+    for table, columns in added.items():
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def seed_db(seed_path=SEED_PATH):
@@ -264,6 +274,14 @@ def _job_values(job):
     if not location:
         parts = [job.get("job_city"), job.get("job_state"), job.get("job_country")]
         location = ", ".join(p for p in parts if p) or None
+    salary_min, salary_max = job.get("job_min_salary"), job.get("job_max_salary")
+    salary_period, salary_text = job.get("job_salary_period"), job.get("job_salary_string")
+    # No salary field? Look for a posted pay range in the description (or the site's salary text).
+    if not salary_min and not salary_max:
+        found = pay.parse_pay(salary_text) or pay.parse_pay(job.get("job_description"))
+        if found:
+            salary_min, salary_max, salary_period = found["min"], found["max"], found["period"]
+            salary_text = salary_text or found["text"]
     return {
         "job_id": job["job_id"],
         "title": job.get("job_title") or "(untitled)",
@@ -272,10 +290,12 @@ def _job_values(job):
         "is_remote": int(bool(job.get("job_is_remote"))),
         "employment_type": job.get("job_employment_type"),
         "posted_at": job.get("job_posted_at_datetime_utc"),
-        "salary_min": job.get("job_min_salary"),
-        "salary_max": job.get("job_max_salary"),
-        "salary_period": job.get("job_salary_period"),
-        "salary_text": job.get("job_salary_string"),
+        "salary_min": salary_min,
+        "salary_max": salary_max,
+        "salary_period": (salary_period or "").upper() or None,
+        "salary_text": salary_text,
+        "req_number": job.get("job_req_id"),
+        "closes_at": job.get("job_closes_at") or job.get("job_offer_expiration_datetime_utc"),
         "apply_link": job.get("job_apply_link"),
         "publisher": job.get("job_publisher"),
         "description": job.get("job_description"),
@@ -304,12 +324,13 @@ def save_results(results, search_id=None, company_id=None):
                 conn.execute("""
                     UPDATE jobs SET title=?, company=?, location=?, is_remote=?, employment_type=?,
                         posted_at=?, salary_min=?, salary_max=?, salary_period=?, salary_text=?,
-                        apply_link=?, publisher=?, description=?, raw_json=?, last_seen_at=?
+                        req_number=?, closes_at=?, apply_link=?, publisher=?, description=?,
+                        raw_json=?, last_seen_at=?
                     WHERE id=?
                 """, (v["title"], v["company"], v["location"], v["is_remote"], v["employment_type"],
                       v["posted_at"], v["salary_min"], v["salary_max"], v["salary_period"],
-                      v["salary_text"], v["apply_link"], v["publisher"], v["description"],
-                      v["raw_json"], ts, row_id))
+                      v["salary_text"], v["req_number"], v["closes_at"], v["apply_link"],
+                      v["publisher"], v["description"], v["raw_json"], ts, row_id))
                 if company_id is not None:
                     conn.execute("UPDATE jobs SET company_id = ? WHERE id = ?", (company_id, row_id))
                 seen_count += 1
@@ -333,9 +354,23 @@ def save_results(results, search_id=None, company_id=None):
     return new_count, seen_count
 
 
-def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_only=False):
+JOB_SORTS = {
+    "found": "j.first_seen_at DESC, j.posted_at DESC",
+    "posted": "j.posted_at IS NULL, j.posted_at DESC",
+    # Compare yearly-equivalent pay so hourly and salaried jobs sort together.
+    "pay": "COALESCE(j.salary_max, j.salary_min) IS NULL, "
+           "COALESCE(j.salary_max, j.salary_min) * CASE j.salary_period WHEN 'HOUR' THEN 2080 "
+           "WHEN 'MONTH' THEN 12 ELSE 1 END DESC",
+    "closes": "j.closes_at IS NULL, j.closes_at ASC",
+    "company": "j.company COLLATE NOCASE, j.title COLLATE NOCASE",
+}
+
+
+def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_only=False,
+              hide_not_fit=False, sort="found"):
     sql = ["SELECT j.id, j.company_id, j.title, j.company, j.location, j.is_remote, j.employment_type,",
            "j.posted_at, j.salary_min, j.salary_max, j.salary_period, j.salary_text,",
+           "j.req_number, j.closes_at, j.applied_at,",
            "j.apply_link, j.publisher, j.status, j.notes, j.first_seen_at, j.last_seen_at",
            "FROM jobs j"]
     where, args = [], []
@@ -351,12 +386,15 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
         args.append(status)
     if remote_only:
         where.append("j.is_remote = 1")
+    if hide_not_fit and status != "not_a_fit":
+        where.append("j.status != 'not_a_fit'")
     if text:
-        where.append("(j.title LIKE ? OR j.company LIKE ? OR j.description LIKE ? OR j.notes LIKE ?)")
-        args += [f"%{text}%"] * 4
+        where.append("(j.title LIKE ? OR j.company LIKE ? OR j.description LIKE ? OR j.notes LIKE ?"
+                     " OR j.req_number LIKE ?)")
+        args += [f"%{text}%"] * 5
     if where:
         sql.append("WHERE " + " AND ".join(where))
-    sql.append("ORDER BY j.first_seen_at DESC, j.posted_at DESC")
+    sql.append("ORDER BY " + JOB_SORTS.get(sort, JOB_SORTS["found"]))
     with connect() as conn:
         rows = conn.execute(" ".join(sql), args).fetchall()
     return [dict(r) for r in rows]
@@ -379,6 +417,13 @@ def update_job(job_id, fields):
     if not updates:
         return
     with connect() as conn:
+        # Remember when it was marked applied; un-marking (back to new/interested) clears it.
+        if updates.get("status") == "applied":
+            current = conn.execute("SELECT applied_at FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if current and not current["applied_at"]:
+                updates["applied_at"] = now_iso()
+        elif updates.get("status") in ("new", "interested"):
+            updates["applied_at"] = None
         conn.execute(
             f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in updates)} WHERE id = ?",
             list(updates.values()) + [job_id],

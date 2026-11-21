@@ -205,6 +205,8 @@ def api_list_jobs():
         company_id=request.args.get("company_id", type=int),
         text=(request.args.get("q") or "").strip() or None,
         remote_only=request.args.get("remote") == "1",
+        hide_not_fit=request.args.get("hide_not_fit") == "1",
+        sort=request.args.get("sort") or "found",
     ))
 
 
