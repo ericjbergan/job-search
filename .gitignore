@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Credentials
+.env
+
+# SQLite: jobs.db is tracked on purpose (the Back up button commits it);
+# ignore journals and any stray copies.
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+.claude/

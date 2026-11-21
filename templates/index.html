@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Search</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Job Search</h1>
+        <div class="header-right">
+            <span id="usage" class="usage"></span>
+            <button id="backupBtn" class="secondary" onclick="backup()">Back up</button>
+        </div>
+    </header>
+
+    <div class="layout">
+        <aside>
+            <section class="panel">
+                <h2>New search</h2>
+                <form id="searchForm" onsubmit="return false;">
+                    <label>Search for
+                        <input id="fQuery" placeholder="e.g. senior java developer" required>
+                    </label>
+                    <label>Location
+                        <input id="fLocation" placeholder="e.g. Chicago, IL (optional)">
+                    </label>
+                    <label class="check"><input type="checkbox" id="fRemote"> Remote only</label>
+                    <div class="row">
+                        <label>Posted
+                            <select id="fDatePosted">
+                                <option value="all">Any time</option>
+                                <option value="today">Today</option>
+                                <option value="3days">Last 3 days</option>
+                                <option value="week" selected>Last week</option>
+                                <option value="month">Last month</option>
+                            </select>
+                        </label>
+                        <label>Type
+                            <select id="fType">
+                                <option value="">Any</option>
+                                <option value="FULLTIME">Full-time</option>
+                                <option value="CONTRACTOR">Contract</option>
+                                <option value="PARTTIME">Part-time</option>
+                                <option value="INTERN">Internship</option>
+                            </select>
+                        </label>
+                        <label>Pages
+                            <select id="fPages">
+                                <option value="1" selected>1 (~10)</option>
+                                <option value="2">2 (~20)</option>
+                                <option value="3">3 (~30)</option>
+                            </select>
+                        </label>
+                    </div>
+                    <label>Save as (optional)
+                        <input id="fName" placeholder="name for this saved search">
+                    </label>
+                    <div class="buttons">
+                        <button type="button" onclick="saveAndRun(this)">Save &amp; run</button>
+                        <button type="button" class="secondary" onclick="quickSearch(this)">Search once</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel">
+                <h2>Saved searches</h2>
+                <ul id="savedSearches" class="saved-list"></ul>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <h2>Companies</h2>
+                    <div class="buttons">
+                        <button class="small secondary" id="checkAllBtn" onclick="checkAllCompanies(this)">Check all</button>
+                        <button class="small" onclick="showCompanyForm()">+ Add</button>
+                    </div>
+                </div>
+                <form id="companyForm" class="company-form hidden" onsubmit="return false;">
+                    <input type="hidden" id="cId">
+                    <label>Company name
+                        <input id="cName" placeholder="e.g. Stripe" required>
+                    </label>
+                    <label>Careers page URL
+                        <input id="cUrl" placeholder="e.g. https://boards.greenhouse.io/stripe">
+                        <span class="hint">Greenhouse, Lever and Ashby boards are read directly (free). Anything else uses JSearch.</span>
+                    </label>
+                    <label>Title keywords (comma-separated)
+                        <input id="cKeywords" placeholder="e.g. java, backend, software engineer">
+                    </label>
+                    <label>Locations (comma-separated; remote always included)
+                        <input id="cLocations" placeholder="e.g. Chicago, New York">
+                    </label>
+                    <label>Notes
+                        <input id="cNotes" placeholder="optional">
+                    </label>
+                    <div class="buttons">
+                        <button type="button" id="cSaveBtn" onclick="saveCompany(this)">Add company</button>
+                        <button type="button" class="secondary" onclick="hideCompanyForm()">Cancel</button>
+                    </div>
+                </form>
+                <ul id="companyList" class="saved-list"></ul>
+            </section>
+        </aside>
+
+        <main>
+            <div id="message" class="message hidden"></div>
+
+            <div class="filters">
+                <div id="statusTabs" class="status-tabs"></div>
+                <div class="filter-row">
+                    <input id="textFilter" placeholder="Filter by title, company, description, notes" oninput="debouncedLoadJobs()">
+                    <label class="check"><input type="checkbox" id="remoteFilter" onchange="loadJobs()"> Remote only</label>
+                    <span id="searchFilterChip" class="chip hidden"></span>
+                </div>
+            </div>
+
+            <div id="jobList" class="job-list"></div>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
