@@ -230,8 +230,6 @@ button.flag.on.interested { background: #f0ad4e; border-color: #f0ad4e; color: #
 .benefit-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 13px; }
 .score-chip { background: #eef2f7; border-radius: 10px; padding: 2px 8px; font-size: 12px; }
 .score-line { font-size: 12px; color: #1f3a5f; margin: 2px 0 6px; }
-button.flag.benefits-btn { margin-left: 8px; color: #1e6b34; border-color: #9fd3ae; }
-button.flag.benefits-btn:hover { background: #e7f4ea; }
 .sort-companies { display: flex; align-items: center; gap: 6px; margin: -4px 0 10px; font-size: 12px; }
 .sort-companies select { width: auto; margin: 0; padding: 3px 6px; font-size: 12px; }
 .suggest .reason { color: #666; font-size: 11px; margin-top: 1px; }
@@ -242,3 +240,10 @@ button.flag.benefits-btn:hover { background: #e7f4ea; }
 .panel-head .buttons button { white-space: nowrap; }
 button.flag.save-co-btn { color: #1f3a5f; border-color: #b8c7de; }
 button.flag.save-co-btn:hover { background: #eaf1fd; }
+.default-titles { background: #f4f7fb; border: 1px solid #dde5f0; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+.default-titles label { margin: 0 0 4px; font-weight: 600; color: #1f3a5f; }
+.default-titles-row { display: flex; gap: 6px; }
+.default-titles-row input { margin: 0; }
+.area-label { margin-top: 10px !important; }
+.area-row input#areaRadius { width: 64px; flex: none; }
+.area-row span { align-self: center; font-size: 13px; white-space: nowrap; }

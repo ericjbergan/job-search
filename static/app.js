@@ -120,6 +120,13 @@ async function loadMeta() {
     state.atsHints = meta.ats_token_hints;
     state.priorities = meta.priorities;
     state.companyDefaults = meta.company_defaults;
+    state.defaultKeywords = meta.default_keywords;
+    const dk = document.getElementById('defaultKeywords');
+    if (document.activeElement !== dk) dk.value = meta.default_keywords || '';
+    state.area = meta.area;
+    const home = document.getElementById('areaHome'), radius = document.getElementById('areaRadius');
+    if (document.activeElement !== home) home.value = meta.area.home;
+    if (document.activeElement !== radius) radius.value = meta.area.radius_miles;
     state.benefitScales = meta.benefit_scales;
     state.benefitTopicOrder = meta.benefit_topics.map(([key]) => key);
     state.benefitTopics = Object.fromEntries(meta.benefit_topics);
@@ -187,10 +194,17 @@ function formParams() {
     };
 }
 
+// After a Check or search, bring the results (message + job list) into view.
+function scrollToResults() {
+    document.querySelector('main').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function reportRun(result) {
     renderUsage(result.pages_used_this_month);
-    const skipped = result.outside_area ? ` Skipped ${result.outside_area} outside the Columbus area (or not really remote).` : '';
+    const skipped = result.outside_area
+        ? ` Skipped ${result.outside_area} more than ${state.area.radius_miles} miles from ${state.area.home} (or not really remote).` : '';
     showMessage(`Found ${result.found} jobs: ${result.new} new, ${result.already_saved} already saved.${skipped}`);
+    scrollToResults();
 }
 
 async function withBusy(button, fn) {
@@ -202,9 +216,11 @@ async function withBusy(button, fn) {
         await fn();
     } catch (e) {
         showMessage(e.message, true);
+        scrollToResults();
     } finally {
         buttons.forEach(b => b.disabled = false);
         if (button) button.textContent = original;
+        updateCheckSelectedButton();  // stays disabled when nothing is ticked
     }
 }
 
@@ -307,7 +323,7 @@ async function loadCompanies() {
         const bits = [
             c.priority ? (state.priorities[c.priority] || `P${c.priority}`) : '',
             c.rating ? `★ ${c.rating}` : '',
-            c.keywords || 'all openings',
+            c.keywords ? `+ ${c.keywords}` : '',
         ].filter(Boolean).join(' · ');
         return `
         <li class="${c.id === state.companyId ? 'active' : ''}" onclick="filterByCompany(${c.id})" title="${esc(c.notes || '')}">
@@ -353,6 +369,8 @@ function showCompanyForm(company = null) {
     document.getElementById('cKeywords').value = company ? (company.keywords || '') : (defaults.keywords || '');
     document.getElementById('cLocations').value = company ? (company.locations || '') : (defaults.locations || '');
     document.getElementById('cNotes').value = company ? (company.notes || '') : '';
+    document.getElementById('cKeywordsHint').textContent =
+        `Searched in addition to the default: ${state.defaultKeywords || '(none set)'}`;
     updateTokenHint();
     document.getElementById('cSaveBtn').textContent = company ? 'Save changes' : 'Add company';
     document.getElementById('companyForm').classList.remove('hidden');
@@ -425,6 +443,29 @@ async function checkCompany(companyId, button) {
     });
 }
 
+async function saveArea() {
+    try {
+        const r = await api('/api/settings/area', { method: 'PUT', body: {
+            home: document.getElementById('areaHome').value, radius_miles: document.getElementById('areaRadius').value } });
+        state.area = r;
+        showMessage(`On-site and hybrid jobs will be kept within ${r.radius_miles} miles of ${r.home}. Remote jobs are always kept.`);
+    } catch (e) {
+        showMessage(e.message, true);
+    }
+}
+
+async function saveDefaultKeywords() {
+    const input = document.getElementById('defaultKeywords');
+    try {
+        const r = await api('/api/settings/default_keywords', { method: 'PUT', body: { default_keywords: input.value } });
+        state.defaultKeywords = input.value = r.default_keywords;
+        showMessage(`Every company will now be searched for: ${r.default_keywords}.`);
+        await loadCompanies();
+    } catch (e) {
+        showMessage(e.message, true);
+    }
+}
+
 function toggleCompanySelected(companyId, checked) {
     if (checked) state.selectedCompanies.add(companyId);
     else state.selectedCompanies.delete(companyId);
@@ -494,6 +535,7 @@ async function checkCompanies(companies, button, askAboutQuota) {
         await refreshAll();
         showMessage(`Checked ${toCheck.length} companies: ${found} matching jobs, ${added} new.` +
             (failed.length ? ` Failed: ${failed.join('; ')}` : ''), failed.length > 0);
+        scrollToResults();
     });
 }
 
@@ -559,7 +601,6 @@ function renderJobSummary(job) {
                     <button class="flag ${interested ? 'on interested' : ''}" onclick="toggleFlag(event, ${job.id}, 'interested', '${esc(job.status)}')">★ Interested</button>
                     <button class="flag ${applied ? 'on applied' : ''}" onclick="toggleFlag(event, ${job.id}, 'applied', '${esc(job.status)}')">✓ Applied</button>
                     <button class="flag ${notFit ? 'on not-fit' : ''}" onclick="toggleFlag(event, ${job.id}, 'not_a_fit', '${esc(job.status)}')">✕ Not a fit</button>
-                    ${job.company ? `<button class="flag benefits-btn" title="Benefits at ${esc(job.company)}" onclick="event.stopPropagation(); openBenefits(${esc(JSON.stringify(job.company))}, ${job.id})">$ Benefits</button>` : ''}
                     ${job.company && !job.saved_company_id ? `<button class="flag save-co-btn" title="Add ${esc(job.company)} to your saved companies" onclick="saveJobCompany(event, ${job.id})">+ Save company</button>` : ''}
                 </div>
             </div>

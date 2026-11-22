@@ -117,7 +117,7 @@ class ApiTests(FreshDbTest):
         dup = self.client.post("/api/companies", json={"name": "acme"})
         self.assertEqual(dup.status_code, 400)
 
-        feed = [board_job(1, "Java Developer"), board_job(2, "Office Manager")]
+        feed = [board_job(1, "Java Developer", "Columbus, OH"), board_job(2, "Office Manager", "Columbus, OH")]
         with mock.patch("jobsearch.boards.fetch_greenhouse", return_value=feed):
             r = self.client.post(f"/api/companies/{company['id']}/check")
         body = r.get_json()
@@ -181,7 +181,8 @@ class SeedAndDetectTests(FreshDbTest):
         self.assertEqual(len(db.list_searches()), 2)
         osu = next(c for c in companies if c["name"] == "OSU")
         self.assertEqual((osu["ats"], osu["priority"], osu["rating"]), ("workday", 2, 4.1))
-        self.assertEqual(osu["keywords"], "business analyst")
+        self.assertIsNone(osu["keywords"])  # extras only; "business analyst" is the shared default
+        self.assertEqual(db.get_default_keywords(), "business analyst")
         for c in companies:
             self.assertNotIn("password", (c.get("notes") or "").lower())
 
@@ -589,7 +590,7 @@ class SaveCompanyFromJobTests(FreshDbTest):
         self.assertEqual(r.status_code, 201, r.get_json())
         company = r.get_json()
         self.assertEqual((company["name"], company["ats"], company["careers_url"]), ("Startup Corp", "search", None))
-        self.assertEqual(company["keywords"], "business analyst")
+        self.assertFalse(company["keywords"])  # no extras; the default titles apply
         # Both of that employer's jobs now belong to the new company, and no longer offer the button.
         jobs = self.client.get(f"/api/jobs?company_id={company['id']}").get_json()
         self.assertEqual(len(jobs), 2)
@@ -616,3 +617,94 @@ class RenameLinksJobsTests(FreshDbTest):
         self.assertEqual(r.get_json()["name"], "Huntington")
         self.assertEqual(self.client.get("/api/jobs").get_json()[0]["saved_company_id"], cid)
         self.assertEqual(len(self.client.get(f"/api/jobs?company_id={cid}").get_json()), 1)
+
+
+class DefaultTitlesTests(FreshDbTest):
+    def test_title_terms_merge(self):
+        self.assertEqual(boards.title_terms("business analyst", "product owner, Business Analyst"),
+                         ["business analyst", "product owner"])
+        self.assertEqual(boards.title_terms("", None), [])
+
+    def test_searches_each_title_and_filters(self):
+        calls = []
+
+        def fake_fetch(token, name, query, locations):
+            calls.append(query)
+            return [{"job_id": f"x:{query}", "job_title": f"Senior {query.title()}", "job_location": "Columbus, OH"},
+                    {"job_id": "x:other", "job_title": "Sales Lead", "job_location": "Columbus, OH"}]
+
+        company = {"name": "Pearson", "ats": "jobsyn", "ats_token": "pearson.jobs", "keywords": "product owner",
+                   "locations": "columbus"}
+        with mock.patch.object(boards, "fetch_jobsyn", side_effect=fake_fetch):
+            jobs, _ = boards.check_company(company, default_keywords="business analyst")
+        self.assertEqual(calls, ["business analyst", "product owner"])
+        self.assertEqual(sorted(j["job_title"] for j in jobs), ["Senior Business Analyst", "Senior Product Owner"])
+
+    def test_list_all_boards_fetch_once(self):
+        calls = []
+        with mock.patch.object(boards, "fetch_greenhouse", side_effect=lambda *a: calls.append(a[2]) or []):
+            boards.check_company({"name": "Acme", "ats": "greenhouse", "ats_token": "acme", "keywords": "product owner"},
+                                 default_keywords="business analyst")
+        self.assertEqual(len(calls), 1)
+
+    def test_setting_endpoint_and_upgrade(self):
+        r = self.client.put("/api/settings/default_keywords", json={"default_keywords": " business analyst ,systems analyst "})
+        self.assertEqual(r.get_json()["default_keywords"], "business analyst, systems analyst")
+        self.assertEqual(self.client.get("/api/meta").get_json()["default_keywords"], "business analyst, systems analyst")
+        self.assertEqual(self.client.put("/api/settings/default_keywords", json={"default_keywords": " "}).status_code, 400)
+
+    def test_old_company_titles_split_into_extras(self):
+        with db.connect() as conn:
+            conn.execute("DELETE FROM meta WHERE key IN ('keywords_split', 'default_keywords')")
+        db.add_company({"name": "Pearson", "ats": "search", "keywords": "business analyst, product owner"})
+        db.add_company({"name": "OSU", "ats": "search", "keywords": "business analyst"})
+        db.split_default_keywords()
+        by_name = {c["name"]: c["keywords"] for c in db.list_companies()}
+        self.assertEqual(by_name, {"Pearson": "product owner", "OSU": None})
+
+
+class DistanceAreaTests(FreshDbTest):
+    def area(self, extra=None):
+        from jobsearch import geo
+        home = geo.lookup("Hanover", "OH")
+        return boards.Area(home, 50, extra_centers=[geo.parse_points(extra)[0]] if extra else [])
+
+    def job(self, loc, remote=False, desc=""):
+        return {"job_title": "Business Analyst", "job_location": loc, "job_is_remote": remote, "job_description": desc}
+
+    def test_geo_parsing_and_distance(self):
+        from jobsearch import geo
+        home = geo.lookup("Hanover", "OH")
+        self.assertAlmostEqual(geo.miles(home, geo.lookup("Columbus", "OH")), 38, delta=2)
+        for text, verdict in [("Columbus, OH", "near"), ("Dublin, Ohio, United States", "near"), ("Dublin, OHOH", "near"),
+                              ("OH-Columbus-Easton", "near"), ("New Albany, OH", "near"), ("Zanesville, OH", "near"),
+                              ("Marysville, OH", "far"), ("Cincinnati, OH", "far"), ("Hoboken, NJ", "far"),
+                              ("Bengaluru, Karnataka, IND", "far"), ("Dublin, IRL", "far"), ("Columbus", "near"),
+                              ("Seattle", "far"), ("Multiple Locations", "unknown"), ("OH", "unknown"),
+                              ("Columbus, Ohio; Chicago, IL", "near")]:
+            self.assertEqual(geo.classify(text, home, 50), verdict, text)
+
+    def test_company_filter_uses_distance_and_keeps_remote(self):
+        a = self.area()
+        self.assertTrue(boards.location_matches(self.job("Mount Vernon, OH"), a))
+        self.assertFalse(boards.location_matches(self.job("Cleveland, OH"), a))
+        self.assertTrue(boards.location_matches(self.job("Remote - USA", True), a))
+        self.assertTrue(boards.location_matches(self.job("3 Locations"), a, allow_unknown=True))
+        self.assertFalse(boards.location_matches(self.job("UK Remote", True), a))
+
+    def test_job_board_filter(self):
+        a = self.area()
+        self.assertTrue(boards.in_area(self.job("Lancaster, OH"), a))
+        self.assertFalse(boards.in_area(self.job("Austin, TX"), a))
+        self.assertFalse(boards.in_area(self.job("Austin, TX", True, "This is a hybrid role, 3 days a week in the office."), a))
+        self.assertTrue(boards.in_area(self.job("Austin, TX", True), a))      # real remote
+        self.assertTrue(boards.in_area({**self.job(""), "job_latitude": 40.07, "job_longitude": -82.42}, a))  # Newark by coords
+        chi = self.area("Chicago, IL")
+        self.assertTrue(boards.in_area(self.job("Evanston, IL"), chi))
+
+    def test_area_setting_endpoint(self):
+        self.assertEqual(self.client.get("/api/meta").get_json()["area"], {"home": "Hanover, OH", "radius_miles": 50.0})
+        self.assertEqual(self.client.put("/api/settings/area", json={"home": "Nowhereville, ZZ", "radius_miles": 50}).status_code, 400)
+        self.assertEqual(self.client.put("/api/settings/area", json={"home": "Newark, OH", "radius_miles": 2}).status_code, 400)
+        r = self.client.put("/api/settings/area", json={"home": "Newark, OH", "radius_miles": "40"})
+        self.assertEqual(r.get_json(), {"home": "Newark, OH", "radius_miles": 40.0})

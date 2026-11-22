@@ -10,7 +10,7 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import benefits, boards, db, jsearch
+from jobsearch import benefits, boards, db, geo, jsearch
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -45,6 +45,8 @@ def api_meta():
         "ats_token_hints": boards.ATS_TOKEN_HINTS,
         "priorities": db.PRIORITIES,
         "company_defaults": db.company_defaults(),
+        "default_keywords": db.get_default_keywords(),
+        "area": dict(zip(("home", "radius_miles"), db.get_area_settings())),
         "pages_used_this_month": db.pages_used_this_month(),
         "has_api_key": bool(os.getenv("JSEARCH_API_KEY")),
         "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
@@ -77,14 +79,19 @@ def api_delete_search(search_id):
     return jsonify({"ok": True})
 
 
+def _home_area(extra_location=None):
+    """Jobs within the set radius of home (on-site/hybrid). A one-off search somewhere
+    else ("Chicago, IL") also keeps jobs within the radius of that place."""
+    home_text, radius = db.get_area_settings()
+    home = (geo.parse_points(home_text) or [None])[0]
+    if home is None:
+        return None  # home town not recognized: don't filter by location
+    extra = (geo.parse_points(extra_location) or [None])[0] if extra_location else None
+    return boards.Area(home, radius, extra_centers=[extra])
+
+
 def _search_area(location):
-    """Places a job-board result may be in: the usual Columbus-area list, plus the
-    search's own city (so a one-off "Chicago, IL" search still keeps Chicago jobs)."""
-    terms = boards.split_terms(db.company_defaults().get("locations"))
-    city = boards.norm((location or "").split(",")[0])
-    if city and city not in terms:
-        terms.append(city)
-    return terms
+    return _home_area(location)
 
 
 def _run(params, search_id=None):
@@ -130,6 +137,30 @@ def api_quick_search():
 
 
 # --- companies --------------------------------------------------------------
+
+@app.route("/api/settings/area", methods=["PUT"])
+def api_set_area():
+    data = request.get_json() or {}
+    home = (data.get("home") or "").strip()
+    if not geo.parse_points(home):
+        return _error(f"Couldn't find \"{home}\". Use a US town and state, like Hanover, OH")
+    try:
+        radius = float(data.get("radius_miles"))
+    except (TypeError, ValueError):
+        return _error("Distance must be a number of miles")
+    if not 5 <= radius <= 300:
+        return _error("Distance should be between 5 and 300 miles")
+    db.set_area_settings(home, radius)
+    return jsonify({"home": home, "radius_miles": radius})
+
+
+@app.route("/api/settings/default_keywords", methods=["PUT"])
+def api_set_default_keywords():
+    text = ((request.get_json() or {}).get("default_keywords") or "").strip()
+    if not text:
+        return _error("Enter at least one job title (e.g. business analyst)")
+    return jsonify({"default_keywords": db.set_default_keywords(text)})
+
 
 def _company_fields(data):
     """Clean form input; fill in ats/ats_token from the careers URL when not given."""
@@ -206,7 +237,8 @@ def api_check_company(company_id):
     if not company:
         return _error("Company not found", 404)
     try:
-        jobs, pages = boards.check_company(company)
+        jobs, pages = boards.check_company(company, default_keywords=db.get_default_keywords(),
+                                           area=_home_area())
     except (boards.BoardError, jsearch.JSearchError) as e:
         return _error(str(e), 502)
     if pages:

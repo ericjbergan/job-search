@@ -2,7 +2,9 @@
   "_comment": "Starter data loaded once into a brand-new jobs.db. From the 'Columbus OH Job Sites' spreadsheet; job-search sites (LinkedIn, Indeed, etc.) became the saved searches instead of companies.",
   "defaults": {
     "keywords": "business analyst",
-    "locations": "columbus, new albany, reynoldsburg, westerville, hilliard, grove city, worthington, gahanna, dublin oh, newark oh"
+    "locations": "columbus, new albany, reynoldsburg, westerville, hilliard, grove city, worthington, gahanna, dublin oh, newark oh",
+    "home": "Hanover, OH",
+    "radius_miles": 50
   },
   "companies": [
     {

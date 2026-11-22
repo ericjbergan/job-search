@@ -156,6 +156,7 @@ def init_db(seed_path=SEED_PATH):
     seed_db(seed_path)
     seed_benefits(seed_path)
     upgrade_seed_connectors(seed_path)
+    split_default_keywords(seed_path)
 
 
 def _migrate(conn):
@@ -187,7 +188,9 @@ def seed_db(seed_path=SEED_PATH):
         return
     with open(seed_path, encoding="utf-8") as f:
         seed = json.load(f)
-    defaults = seed.get("defaults", {})
+    # Companies get the default locations; job titles come from the shared default
+    # (see get_default_keywords), so a company's own titles start out empty.
+    defaults = {k: v for k, v in seed.get("defaults", {}).items() if k != "keywords"}
     for company in seed.get("companies", []):
         add_company({**defaults, **company})
     for search in seed.get("searches", []):
@@ -336,14 +339,75 @@ def delete_search(search_id):
 COMPANY_FIELDS = ("name", "careers_url", "ats", "ats_token", "keywords", "locations", "priority", "rating", "notes")
 
 
-def company_defaults(seed_path=SEED_PATH):
-    """Keywords/locations to prefill when adding a company (from the seed file's defaults)."""
+def _seed_defaults(seed_path=SEED_PATH):
     try:
         with open(seed_path, encoding="utf-8") as f:
-            defaults = json.load(f).get("defaults", {})
-    except (OSError, ValueError):
-        defaults = {}
-    return {"keywords": defaults.get("keywords", ""), "locations": defaults.get("locations", "")}
+            return json.load(f).get("defaults", {})
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def company_defaults(seed_path=SEED_PATH):
+    """What to prefill when adding a company: the default locations, and no extra job titles."""
+    return {"keywords": "", "locations": _seed_defaults(seed_path).get("locations", "")}
+
+
+def get_default_keywords(seed_path=SEED_PATH):
+    """Job titles searched at every company (comma-separated), e.g. "business analyst"."""
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'default_keywords'").fetchone()
+    return row["value"] if row else _seed_defaults(seed_path).get("keywords", "")
+
+
+def set_default_keywords(text):
+    text = ", ".join(t.strip() for t in (text or "").split(",") if t.strip())
+    with connect() as conn:
+        conn.execute("INSERT INTO meta (key, value) VALUES ('default_keywords', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (text,))
+    return text
+
+
+def _get_meta(key):
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _set_meta(key, value):
+    with connect() as conn:
+        conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
+
+
+def get_area_settings(seed_path=SEED_PATH):
+    """Home town and radius for on-site/hybrid jobs, e.g. ("Hanover, OH", 50)."""
+    defaults = _seed_defaults(seed_path)
+    home = _get_meta("home") or defaults.get("home") or "Columbus, OH"
+    radius = float(_get_meta("radius_miles") or defaults.get("radius_miles") or 50)
+    return home, radius
+
+
+def set_area_settings(home, radius):
+    _set_meta("home", home)
+    _set_meta("radius_miles", radius)
+
+
+def split_default_keywords(seed_path=SEED_PATH):
+    """One-time upgrade: company titles used to repeat the default ("business analyst");
+    now they only hold extras, so take the default terms out of each company's list."""
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM meta WHERE key = 'keywords_split'").fetchone():
+            return
+        conn.execute("INSERT INTO meta (key, value) VALUES ('keywords_split', ?)", (now_iso(),))
+    default = get_default_keywords(seed_path)
+    set_default_keywords(default)
+    default_terms = {t.strip().lower() for t in default.split(",") if t.strip()}
+    with connect() as conn:
+        for row in conn.execute("SELECT id, keywords FROM companies").fetchall():
+            terms = [t.strip() for t in (row["keywords"] or "").split(",") if t.strip()]
+            extras = [t for t in terms if t.lower() not in default_terms]
+            if extras != terms:
+                conn.execute("UPDATE companies SET keywords = ? WHERE id = ?", (", ".join(extras) or None, row["id"]))
 
 
 def list_companies():

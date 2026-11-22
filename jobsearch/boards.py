@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import requests
 
-from jobsearch import jsearch, workmode
+from jobsearch import geo, jsearch, workmode
 
 ATS_LABELS = {
     "workday": "Workday",
@@ -115,9 +115,46 @@ def title_matches(job, keywords):
     return not keywords or any(k in title for k in keywords)
 
 
+class Area:
+    """"Within N miles of home": the search area for on-site and hybrid jobs.
+
+    Extra centers cover a one-off search somewhere else ("Chicago, IL").
+    """
+
+    def __init__(self, home, radius, extra_centers=()):
+        self.centers = [home, *[c for c in extra_centers if c]]
+        self.radius = radius
+        self._names = None
+
+    @property
+    def names(self):
+        """Every place name inside the area, for picking careers-site location filters."""
+        if self._names is None:
+            self._names = set().union(*(geo.nearby_place_names(c, self.radius) for c in self.centers))
+        return self._names
+
+    def where(self, job):
+        """'near', 'far' or 'unknown' for a job's location."""
+        verdicts = {geo.classify(job.get("job_location"), c, self.radius) for c in self.centers}
+        if "near" in verdicts:
+            return "near"
+        if verdicts == {"unknown"} and job.get("job_latitude") and job.get("job_longitude"):
+            point = (float(job["job_latitude"]), float(job["job_longitude"]))
+            return "near" if any(geo.miles(c, point) <= self.radius for c in self.centers) else "far"
+        return "far" if "far" in verdicts else "unknown"
+
+
 def location_matches(job, locations, allow_unknown=False):
+    """Is the job somewhere she'd work? US-remote always passes.
+
+    `locations` is an Area (distance from home) or, for older callers, a list of
+    place-name terms.
+    """
     if not locations or is_us_remote(job):
         return True
+    if isinstance(locations, Area):
+        where = locations.where(job)
+        return where == "near" or (where == "unknown" and (allow_unknown or location_unknown(job)))
     if allow_unknown and location_unknown(job):
         return True
     loc = norm(job.get("job_location"))
@@ -135,8 +172,13 @@ def in_area(job, locations):
         job = {**job, "job_location": ", ".join(filter(None, [job.get("job_city"), job.get("job_state")]))}
     if not locations or (location_unknown(job) and not job.get("job_is_remote")):
         return True
-    loc = norm(job.get("job_location"))
-    if any(term in loc for term in locations):
+    if isinstance(locations, Area):
+        where = locations.where(job)
+        if where == "near":
+            return True
+        if where == "unknown" and not job.get("job_is_remote"):
+            return True
+    elif any(term in norm(job.get("job_location")) for term in locations):
         return True
     if is_us_remote(job):
         return not workmode.contradicts_remote(job.get("job_title"), job.get("job_location"),
@@ -534,6 +576,11 @@ def workday_details(job, base, path):
     if info.get("location"):
         job["job_location"] = "; ".join([info["location"], *extra])
         job["job_is_remote"] = job["job_is_remote"] or "remote" in norm(job["job_location"])
+        # Workday often gives a bare city ("Warsaw"); add the country when it isn't the US
+        # so the distance check doesn't mistake Warsaw, Poland for Warsaw, Ohio.
+        country = ((info.get("country") or {}).get("descriptor") or "").strip()
+        if country and not country.lower().startswith("united states"):
+            job["job_location"] += f", {country}"
     job["job_description"] = html_to_text(info.get("jobDescription"))
     job["job_employment_type"] = info.get("timeType")
     if info.get("startDate"):
@@ -901,28 +948,53 @@ def _connector(ats):
 
 # --- company check -------------------------------------------------------------
 
-def check_company(company):
-    """Search one company's openings, filtered by its keywords and locations.
+# These list every opening and ignore the search text, so one fetch covers all titles.
+_LIST_ALL = {"greenhouse", "lever", "ashby", "rippling", "adp", "adp_myjobs"}
+MAX_TITLE_SEARCHES = 5
+
+
+def title_terms(default_keywords, company_keywords):
+    """The default titles plus this company's extra titles, without duplicates, in order."""
+    seen, terms = set(), []
+    for text in (default_keywords, company_keywords):
+        for t in (text or "").split(","):
+            t = t.strip()
+            if t and t.lower() not in seen:
+                seen.add(t.lower())
+                terms.append(t)
+    return terms
+
+
+def check_company(company, default_keywords="", area=None):
+    """Search one company's openings for the default titles plus its own extra titles,
+    filtered by its locations.
 
     Returns (jobs, jsearch_pages_used). Direct career-site searches are free;
     only the JSearch fallback uses API quota.
     """
-    keyword_text = (company.get("keywords") or "").strip()
-    keywords = split_terms(keyword_text)
-    locations = split_terms(company.get("locations"))
+    terms = title_terms(default_keywords, company.get("keywords"))
+    keyword_text = ", ".join(terms)
+    keywords = [norm(t) for t in terms]
+    # Distance from home when an Area is given; otherwise the company's own place list.
+    locations = area if area is not None else split_terms(company.get("locations"))
+    site_terms = sorted(area.names) if area is not None else locations  # for careers-site location filters
     ats = company.get("ats") or "search"
-    # Search engines on these sites take one phrase; use the first keyword and filter titles for the rest.
-    query = (keyword_text.split(",")[0].strip() if keyword_text else "")
 
     fetch = _connector(ats)
     if fetch:
         token = company.get("ats_token") or ("amazon" if ats == "amazon" else None)
         if not token:
             raise BoardError(f"No {ATS_LABELS[ats]} board ID set for {company['name']}")
+        # Careers-site search boxes take one phrase, so search each title and merge.
+        queries = [None] if ats in _LIST_ALL or not terms else terms[:MAX_TITLE_SEARCHES]
+        jobs = {}
         try:
-            jobs = fetch(token, company["name"], query, locations)
+            for query in queries:
+                for j in fetch(token, company["name"], query or "", site_terms):
+                    jobs.setdefault(j["job_id"], j)
         except (ValueError, KeyError) as e:
             raise BoardError(f"Bad board ID for {ATS_LABELS[ats]} ({token}): {e}") from e
+        jobs = list(jobs.values())
         jobs = [j for j in jobs if title_matches(j, keywords) and location_matches(j, locations, allow_unknown=True)]
         for j in jobs[:MAX_DETAIL_FETCHES]:
             if "_enrich" in j:
