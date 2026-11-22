@@ -15,11 +15,11 @@ import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import requests
 
-from jobsearch import jsearch
+from jobsearch import jsearch, workmode
 
 ATS_LABELS = {
     "workday": "Workday",
@@ -32,6 +32,11 @@ ATS_LABELS = {
     "phenom": "Phenom",
     "rippling": "Rippling",
     "amazon": "Amazon",
+    "dayforce": "Dayforce",
+    "talentegy": "Talentegy",
+    "avature": "Avature",
+    "adp_myjobs": "ADP MyJobs",
+    "jobsyn": "DirectEmployers",
     "greenhouse": "Greenhouse",
     "lever": "Lever",
     "ashby": "Ashby",
@@ -51,6 +56,11 @@ ATS_TOKEN_HINTS = {
     "phenom": "careers site host, e.g. jobs.battelle.org",
     "rippling": "board name, e.g. joinroot",
     "amazon": "(none needed)",
+    "dayforce": "client/board from the URL, e.g. thg/ALLCAREERS",
+    "talentegy": "careers site host, e.g. jobs.cardinalhealth.com",
+    "avature": "site host + path, e.g. apply.deloitte.com/en_US/careers",
+    "adp_myjobs": "site name from myjobs.adp.com/<name>/cx, e.g. ecsfederal",
+    "jobsyn": "the .jobs site host, e.g. pearson.jobs",
     "greenhouse": "board name, e.g. stripe",
     "lever": "board name, e.g. spotify",
     "ashby": "board name, e.g. ramp",
@@ -96,7 +106,8 @@ def is_us_remote(job):
 
 def location_unknown(job):
     loc = norm(job.get("job_location"))
-    return not loc or re.fullmatch(r"\d+ locations|multiple( locations)?", loc) is not None
+    # "3 Locations", "Multiple", or just a state ("OH") don't say where the job actually is.
+    return not loc or re.fullmatch(r"\d+ locations|multiple( locations)?|[a-z]{2}|ohio|united states|usa|us", loc) is not None
 
 
 def title_matches(job, keywords):
@@ -111,6 +122,26 @@ def location_matches(job, locations, allow_unknown=False):
         return True
     loc = norm(job.get("job_location"))
     return any(term in loc for term in locations)
+
+
+def in_area(job, locations):
+    """For job-board results: keep jobs in the area, real US-remote jobs, and jobs with no location.
+
+    Job boards flag some hybrid/on-site jobs as remote, so a "remote" job whose title,
+    location or description clearly says hybrid or on-site only counts if it's local.
+    """
+    # JSearch sometimes leaves job_location empty and fills city/state instead.
+    if not job.get("job_location"):
+        job = {**job, "job_location": ", ".join(filter(None, [job.get("job_city"), job.get("job_state")]))}
+    if not locations or (location_unknown(job) and not job.get("job_is_remote")):
+        return True
+    loc = norm(job.get("job_location"))
+    if any(term in loc for term in locations):
+        return True
+    if is_us_remote(job):
+        return not workmode.contradicts_remote(job.get("job_title"), job.get("job_location"),
+                                               job.get("job_description"))
+    return False
 
 
 def matches(job, keywords, locations):
@@ -336,6 +367,14 @@ def detect_ats(url):
         return "rippling", parts[0]
     if host.endswith("amazon.jobs"):
         return "amazon", "amazon"
+    if host == "jobs.dayforcehcm.com":
+        rest = [p for p in parts if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", p)]
+        if len(rest) >= 2:
+            return "dayforce", f"{rest[0]}/{rest[1]}"
+    if host == "myjobs.adp.com" and parts:
+        return "adp_myjobs", parts[0]
+    if host.endswith(".jobs") and not host.endswith("amazon.jobs"):
+        return "jobsyn", host
     return "search", None
 
 
@@ -701,11 +740,156 @@ def fetch_amazon(token, company_name, query, locations=None):
     return jobs
 
 
+def fetch_dayforce(token, company_name, query, locations=None):
+    """Dayforce candidate portal. Its search API wants the standard anti-forgery token the
+    page itself gets from /api/auth/csrf (no sign-in involved)."""
+    ns, board = token.split("/")
+    base = "https://jobs.dayforcehcm.com"
+    session = requests.Session()
+    session.headers.update(UA)
+    try:
+        ctx = session.get(f"{base}/api/geo/{ns}/sitecontext/{ns}/{board}/en-US", timeout=45).json()
+        csrf = session.get(f"{base}/api/auth/csrf", timeout=45).json()["csrfToken"]
+    except (requests.RequestException, ValueError, KeyError) as e:
+        raise BoardError(f"Could not open the Dayforce job board: {e}")
+    jobs, start = [], 0
+    while start < MAX_RESULTS:
+        body = {"clientNamespace": ns, "jobBoardCode": board, "cultureCode": "en-US", "distance": 25,
+                "paginationStart": start, "searchText": query or "", "jobBoardId": ctx.get("jobBoardId"),
+                "clientId": ctx.get("clientId")}
+        try:
+            resp = session.post(f"{base}/api/geo/{ns}/jobposting/search", json=body,
+                                headers={"x-csrf-token": csrf}, timeout=45)
+        except requests.RequestException as e:
+            raise BoardError(f"Could not reach the Dayforce job board: {e}")
+        if resp.status_code != 200:
+            raise BoardError(f"Dayforce job board returned HTTP {resp.status_code}")
+        data = resp.json()
+        batch = data.get("jobPostings") or []
+        for j in batch:
+            locs = [l.get("formattedAddress") for l in j.get("postingLocations") or []]
+            jobs.append(_job(f"dayforce:{ns}:{j['jobPostingId']}", j.get("jobTitle"), company_name,
+                             "; ".join(filter(None, locs)), remote=j.get("hasVirtualLocation"),
+                             posted=j.get("postingStartTimestampUTC"), closes=j.get("postingExpiryTimestampUTC"),
+                             link=f"{base}/en-US/{ns}/{board}/jobs/{j['jobPostingId']}", publisher="Dayforce",
+                             description=html_to_text(j.get("jobDescription")), req=j.get("jobReqId")))
+        start += len(batch)
+        if not batch or start >= (data.get("maxCount") or 0):
+            break
+    return jobs
+
+
+def _slug(text):
+    return "-".join(norm(text).split())
+
+
+def fetch_talentegy(token, company_name, query, locations=None):
+    host = token
+    jobs, start = [], 0
+    while start < MAX_RESULTS:
+        data = _json("POST", f"https://{host}/Search/SearchResults",
+                     params={"Keyword": query or "", "jtStartIndex": start, "jtPageSize": 50},
+                     headers={"X-Requested-With": "XMLHttpRequest"})
+        batch = data.get("Records") or []
+        for r in batch:
+            text = {k: html_to_text(v) if isinstance(v, str) else v for k, v in r.items()}
+            jobs.append(_job(f"talentegy:{host}:{r['ID']}", text.get("Title"), company_name,
+                             text.get("CityStateDataAbbrev") or text.get("CityStateData") or text.get("LocationName"),
+                             remote=r.get("IsRemote"), posted=r.get("PostedDateRaw"), closes=r.get("ExpirationDate"),
+                             link=f"https://{host}/search/jobdetails/{_slug(text.get('Title'))}/{r['ID']}",
+                             publisher="Talentegy", employment_type=text.get("TypeName"),
+                             req=text.get("ReferenceNumber")))
+        start += len(batch)
+        if not batch or start >= (data.get("TotalRecordCount") or 0):
+            break
+    return jobs
+
+
+def fetch_avature(token, company_name, query, locations=None):
+    """Avature career sites: read the search results page (its RSS feed ignores the keyword)."""
+    base = f"https://{token}"
+    jobs, offset, seen = [], 0, set()
+    while offset < MAX_RESULTS:
+        url = f"{base}/SearchJobs/{quote(query or '')}/"
+        page = _request("GET", url, params={"jobRecordsPerPage": 50, "jobOffset": offset},
+                        headers={"Accept": "text/html"}).text
+        blocks = re.findall(r'<h3[^>]*article__header__text__title[^>]*>(.*?)</h3>\s*'
+                            r'<div[^>]*article__header__text__subtitle[^>]*>(.*?)</div>', page, re.S)
+        for head, sub in blocks:
+            a = re.search(r'href="([^"]+/JobDetail/[^"]+)"[^>]*>(.*?)</a>', head, re.S)
+            if not a:
+                continue
+            link, title = a.group(1), html_to_text(a.group(2))
+            spans = [html_to_text(s) for s in re.findall(r"<span[^>]*>(.*?)</span>", sub, re.S)]
+            job_id = link.rstrip("/").rsplit("/", 1)[-1]
+            jobs.append(_job(f"avature:{token.split('/')[0]}:{job_id}", title, company_name,
+                             spans[-1] if spans else None, link=link, publisher="Avature", req=job_id))
+        before = len(seen)
+        seen.update(j["job_id"] for j in jobs)
+        if not blocks or len(seen) == before:
+            break
+        offset += len(blocks)  # some Avature sites ignore jobRecordsPerPage and page by 10
+    return list({j["job_id"]: j for j in jobs}.values())
+
+
+def fetch_adp_myjobs(token, company_name, query=None, locations=None):
+    """ADP's MyJobs career sites list every opening; titles are filtered locally."""
+    site = _json("GET", f"https://myjobs.adp.com/public/staffing/v1/career-site/{token}")
+    orgoid = site.get("orgoid")
+    if not orgoid:
+        raise BoardError("ADP MyJobs site didn't give an organization ID")
+    jobs, skip = [], 0
+    while skip < 500:
+        data = _json("GET", "https://myjobs.adp.com/public/staffing/v1/job-requisitions",
+                     params={"$top": 100, "$skip": skip}, headers={"orgoid": orgoid})
+        batch = data.get("jobRequisitions") or []
+        for j in batch:
+            locs = [l.get("nameCode", {}).get("shortName") or l.get("address", {}).get("cityName")
+                    for l in (j.get("requisitionLocations") or j.get("postingLocations") or [])]
+            jobs.append(_job(f"adp_myjobs:{token}:{j.get('reqId')}", j.get("jobTitle"), company_name,
+                             "; ".join(filter(None, locs)) or None, posted=j.get("postingDate") or j.get("postDate"),
+                             link=f"https://myjobs.adp.com/{token}/cx/job-details?reqId={j.get('reqId')}",
+                             publisher="ADP", req=j.get("clientRequisitionID")))
+        skip += len(batch)
+        if len(batch) < 100 or skip >= (data.get("count") or 0):
+            break
+    return jobs
+
+
+def fetch_jobsyn(token, company_name, query, locations=None):
+    """DirectEmployers '.jobs' sites (pearson.jobs). The x-origin header names which site is asking."""
+    host = token
+    jobs, page = [], 1
+    while len(jobs) < MAX_RESULTS:
+        data = _json("GET", "https://prod-search-api.jobsyn.org/api/v1/solr/search",
+                     params={"q": query or "", "page": page, "num_items": 50}, headers={"x-origin": host})
+        batch = data.get("jobs") or []
+        for j in batch:
+            other = {}
+            try:
+                other = json.loads(j.get("other") or "{}")
+            except ValueError:
+                pass
+            place = j.get("state_short") or j.get("country_short_exact") or ""
+            loc_slug = _slug(f"{j.get('city_exact') or 'virtual'} {place}")
+            jobs.append(_job(f"jobsyn:{host}:{j.get('guid')}", j.get("title_exact"), company_name,
+                             j.get("location_exact"), posted=j.get("date_new") or j.get("date_added"),
+                             link=f"https://{host}/{loc_slug}/{j.get('title_slug')}/{j.get('guid')}/job/",
+                             publisher="DirectEmployers", description=j.get("description"), req=j.get("reqid"),
+                             work_mode=other.get("WorkPlaceTypeCode")))
+        page += 1
+        if not batch or not (data.get("pagination") or {}).get("has_more_pages"):
+            break
+    return jobs
+
+
 _CONNECTORS = {
     "greenhouse": "fetch_greenhouse", "lever": "fetch_lever", "ashby": "fetch_ashby",
     "rippling": "fetch_rippling", "adp": "fetch_adp", "workday": "fetch_workday",
     "oracle": "fetch_oracle", "ukg": "fetch_ukg", "eightfold": "fetch_eightfold",
     "jibe": "fetch_jibe", "radancy": "fetch_radancy", "phenom": "fetch_phenom", "amazon": "fetch_amazon",
+    "dayforce": "fetch_dayforce", "talentegy": "fetch_talentegy", "avature": "fetch_avature",
+    "adp_myjobs": "fetch_adp_myjobs", "jobsyn": "fetch_jobsyn",
 }
 
 
@@ -761,4 +945,4 @@ def check_company(company):
         employer = norm(r.get("employer_name"))
         if employer and (name in employer or employer in name):
             own.append(r)
-    return [j for j in own if matches(j, keywords, locations)], pages
+    return [j for j in own if title_matches(j, keywords) and in_area(j, locations)], pages

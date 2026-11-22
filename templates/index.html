@@ -73,10 +73,20 @@
                 <div class="panel-head">
                     <h2>Companies</h2>
                     <div class="buttons">
+                        <button class="small" id="checkSelectedBtn" onclick="checkSelectedCompanies(this)" disabled>Check selected</button>
                         <button class="small secondary" id="checkAllBtn" onclick="checkAllCompanies(this)">Check all</button>
                         <button class="small" onclick="showCompanyForm()">+ Add</button>
                     </div>
                 </div>
+                <div class="select-links">Select: <a onclick="selectCompanies('all')">all</a> ·
+                    <a onclick="selectCompanies('free')">free only</a> · <a onclick="selectCompanies('none')">none</a></div>
+                <label class="sort-companies">Sort
+                    <select id="companySort" onchange="setCompanySort(this.value)">
+                        <option value="priority">Priority</option>
+                        <option value="name">A–Z</option>
+                        <option value="score">Benefits score</option>
+                    </select>
+                </label>
                 <form id="companyForm" class="company-form hidden" onsubmit="return false;">
                     <input type="hidden" id="cId">
                     <label>Company name
@@ -149,6 +159,33 @@
 
             <div id="jobList" class="job-list"></div>
         </main>
+    </div>
+
+    <div id="benefitsModal" class="modal hidden" onclick="if (event.target === this) closeBenefits()">
+        <div class="modal-box">
+            <div class="modal-head">
+                <h2 id="bTitle">Benefits</h2>
+                <button class="small secondary" onclick="closeBenefits()">Close</button>
+            </div>
+            <div id="bMessage" class="message hidden"></div>
+
+            <h3>Scores <span class="hint-inline">same scales as the spreadsheet</span></h3>
+            <div class="score-grid" id="bScores"></div>
+
+            <label>Notes
+                <textarea id="bNotes" placeholder="e.g. 6% 401k match, 4 weeks vacation to start"></textarea>
+            </label>
+            <label>Benefits page (optional)
+                <input id="bUrl" placeholder="https://… company benefits page; helps the lookup find the right page">
+            </label>
+            <div class="buttons">
+                <button onclick="saveBenefits(this)">Save</button>
+                <button class="secondary" id="bLookupBtn" onclick="lookupBenefits(this)">Look up benefits</button>
+                <span class="hint-inline" id="bLookupHint"></span>
+            </div>
+
+            <div id="bFacts"></div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>

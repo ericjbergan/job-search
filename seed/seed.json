@@ -112,7 +112,8 @@
     {
       "name": "Cambium Learning Group",
       "careers_url": "https://jobs.cambiumlearning.com/",
-      "ats": "search",
+      "ats": "workday",
+      "ats_token": "cambiumlearning.wd1.myworkdayjobs.com/cambiumlearning/camb",
       "priority": 2,
       "notes": "Remote · Testing Company · K-12 Educational Assessment"
     },
@@ -133,7 +134,8 @@
     {
       "name": "Cardinal Health",
       "careers_url": "https://jobs.cardinalhealth.com/",
-      "ats": "search",
+      "ats": "talentegy",
+      "ats_token": "jobs.cardinalhealth.com",
       "priority": 5,
       "rating": 3.6,
       "notes": "Hybrid, Dublin, 2-3 days/week in office · Columbus Local · Healthcare\nNo jobs on 11/04"
@@ -173,14 +175,16 @@
     {
       "name": "Data Recognition Corp",
       "careers_url": "https://jobs.dayforcehcm.com/drc/CANDIDATEPORTAL",
-      "ats": "search",
+      "ats": "dayforce",
+      "ats_token": "drc/CANDIDATEPORTAL",
       "priority": 5,
       "notes": "MN, some remote · Testing Company · K-12 Educational Assessment\nNo jobs on 11/04"
     },
     {
       "name": "Deloitte",
       "careers_url": "https://apply.deloitte.com/en_US/careers",
-      "ats": "search",
+      "ats": "avature",
+      "ats_token": "apply.deloitte.com/en_US/careers",
       "priority": 2,
       "notes": "Consulting Firm\nSearch tip - note 'Opportunities for experienced professionals' vs. 'Open talent opportunities'"
     },
@@ -194,7 +198,8 @@
     {
       "name": "Everforth ECS",
       "careers_url": "https://myjobs.adp.com/ecsfederal/cx/job-listing?rb=CareerSite",
-      "ats": "search",
+      "ats": "adp_myjobs",
+      "ats_token": "ecsfederal",
       "priority": 1,
       "rating": 3.9,
       "notes": "Remote · Remote Company · Government"
@@ -202,13 +207,14 @@
     {
       "name": "Hanover Insurance Group",
       "careers_url": "https://jobs.dayforcehcm.com/thg/ALLCAREERS",
-      "ats": "search",
+      "ats": "dayforce",
+      "ats_token": "thg/ALLCAREERS",
       "priority": 2,
       "rating": 4.0,
       "notes": "Remote (Worcester, MA) · Remote Company · Insurance\n6% 401K matching, 4 weeks vacation to start (can purchase more). Low pay: 85k-105k for a Sr BA. Though remote is an option, most do work onsite. 10-15% annual bonuses"
     },
     {
-      "name": "Huntington Bank",
+      "name": "Huntington",
       "careers_url": "https://www.huntington.com/careers",
       "ats": "search",
       "priority": 5,
@@ -339,7 +345,8 @@
     {
       "name": "Pearson",
       "careers_url": "https://pearson.jobs/locations/usa/jobs/",
-      "ats": "search",
+      "ats": "jobsyn",
+      "ats_token": "pearson.jobs",
       "priority": 2,
       "rating": 3.5,
       "notes": "Testing Company · Admission & Testing\nLook for 'Advanced Specialist'. 5.5% 401k match, 15 vacation, 5 personal, 72 hours sick"
@@ -347,7 +354,8 @@
     {
       "name": "Prometric",
       "careers_url": "https://jobs.dayforcehcm.com/prometric/CANDIDATEPORTAL",
-      "ats": "search",
+      "ats": "dayforce",
+      "ats_token": "prometric/CANDIDATEPORTAL",
       "priority": 5,
       "notes": "Remote · Testing Company · Pro Certification & Test Delivery\nNo jobs on 11/04"
     },
@@ -392,7 +400,7 @@
     },
     {
       "name": "State of Ohio",
-      "careers_url": "https://dasstateoh.taleo.net/careersection/oh_ext/jobsearch.ftl?lang=en",
+      "careers_url": "https://stateofohio.csod.com/ux/ats/careersite/1/home?c=stateofohio",
       "ats": "search",
       "priority": 7,
       "notes": "Hybrid, Columbus, 2-3 days/week in office · Columbus Local · Government\nNot much here"
@@ -423,7 +431,8 @@
     {
       "name": "Wexner Medical Center",
       "careers_url": "https://careers.wexnermedical.osu.edu/search/searchjobs",
-      "ats": "search",
+      "ats": "talentegy",
+      "ats_token": "careers.wexnermedical.osu.edu",
       "priority": 2,
       "notes": "Mostly onsite, location? · Columbus Local · Healthcare"
     },
@@ -444,6 +453,155 @@
       "priority": 1,
       "rating": 3.2,
       "notes": "Remote · Remote Company · Real Estate Tech"
+    }
+  ],
+  "benefits": [
+    {
+      "company": "Abbott Laboratories",
+      "retirement_score": 4,
+      "pto_score": 1,
+      "commute_score": 1,
+      "bonus_score": 2
+    },
+    {
+      "company": "American Electric Power (AEP)",
+      "retirement_score": 2.75,
+      "pto_score": 2,
+      "commute_score": 1,
+      "bonus_score": 3,
+      "notes": "Pension, 4.5% 401k match, 3 weeks vacation + 3 personal days + sick time"
+    },
+    {
+      "company": "American Regent, Inc",
+      "retirement_score": 4,
+      "pto_score": 2.5,
+      "commute_score": 0.75,
+      "bonus_score": 2,
+      "notes": "6% match + profit sharing; PTO? + 4 personal days & 15 holidays (Xmas-New Year)"
+    },
+    {
+      "company": "Bath & Body Works",
+      "retirement_score": 3,
+      "pto_score": 1,
+      "commute_score": 1,
+      "bonus_score": 3,
+      "notes": "5% 401K match"
+    },
+    {
+      "company": "Cambium Learning Group",
+      "retirement_score": 2,
+      "pto_score": 2,
+      "commute_score": 4,
+      "bonus_score": 3
+    },
+    {
+      "company": "Cardinal Health",
+      "retirement_score": 2,
+      "pto_score": 2,
+      "commute_score": 2,
+      "bonus_score": 1
+    },
+    {
+      "company": "Chipotle",
+      "retirement_score": 2,
+      "pto_score": 1,
+      "commute_score": 0,
+      "bonus_score": 3
+    },
+    {
+      "company": "JPMorgan Chase",
+      "retirement_score": 3,
+      "pto_score": 4,
+      "commute_score": 0,
+      "bonus_score": 4
+    },
+    {
+      "company": "Liberty Mutual",
+      "retirement_score": 4,
+      "pto_score": 4,
+      "commute_score": 3,
+      "bonus_score": 4
+    },
+    {
+      "company": "Nationwide Children's",
+      "retirement_score": 2.5,
+      "pto_score": 1,
+      "commute_score": 2.5,
+      "bonus_score": 2
+    },
+    {
+      "company": "OSU",
+      "retirement_score": 4,
+      "pto_score": 2,
+      "commute_score": 2.5,
+      "bonus_score": 2,
+      "notes": "Great retirement benefits (I believe 14% contributed for the ARP plan, vested immediately). PTO is 10 days for new employees but could be higher if they use my experience years. Sick time - 15 days per year, can be saved up with no limit"
+    },
+    {
+      "company": "Park National Bank",
+      "retirement_score": 4,
+      "pto_score": 2,
+      "commute_score": 2,
+      "bonus_score": 3
+    },
+    {
+      "company": "PSI Services",
+      "retirement_score": 2,
+      "pto_score": 2,
+      "commute_score": 4,
+      "bonus_score": 2
+    },
+    {
+      "company": "Victoria's Secret",
+      "retirement_score": 1,
+      "pto_score": 1,
+      "commute_score": 1,
+      "bonus_score": 3
+    },
+    {
+      "company": "Wendy's",
+      "retirement_score": 1,
+      "pto_score": 2,
+      "commute_score": 0,
+      "bonus_score": 4,
+      "notes": "4% 401k match"
+    },
+    {
+      "company": "Wexner Medical Center",
+      "retirement_score": 4,
+      "pto_score": 2,
+      "commute_score": 2.5,
+      "bonus_score": 2
+    },
+    {
+      "company": "Williams",
+      "retirement_score": 4,
+      "pto_score": 2,
+      "commute_score": 1,
+      "bonus_score": 3
+    },
+    {
+      "company": "Zillow",
+      "retirement_score": 2.75,
+      "pto_score": 4,
+      "commute_score": 4,
+      "bonus_score": 2
+    },
+    {
+      "company": "Hanover Insurance Group",
+      "notes": "6% 401K matching, 4 weeks vacation to start (can purchase more). 10-15% annual bonuses. Low pay: 85k-105k for a Sr BA"
+    },
+    {
+      "company": "Pearson",
+      "notes": "5.5% 401k match, 15 vacation, 5 personal, 72 hours sick"
+    },
+    {
+      "company": "CACI International",
+      "notes": "4% matching; unlimited PTO I believe"
+    },
+    {
+      "company": "Battelle",
+      "notes": "Every other Friday off"
     }
   ],
   "searches": [

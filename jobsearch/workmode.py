@@ -30,6 +30,24 @@ _DESC_ONSITE = re.compile(
     r"|in[- ]office (role|position|5 days))\b", re.I)
 
 
+# Strong signs a job flagged "remote" is really hybrid or on-site. Stricter than the
+# phrases detect() uses, because a hit here drops the job from results.
+_NOT_REMOTE = re.compile(
+    r"\b(hybrid (role|position|schedule|work|model|work schedule|environment|opportunity)"
+    r"|(this|the) (role|position|job) is (a )?(hybrid|on-?site|in[- ]office)"
+    r"|\d\s*(\+\s*)?days? (per|a|each) week (in|at) (the |our )?(office|on-?site)"
+    r"|(must|required to) (work|be) (on-?site|in[- ]office|in the office)|fully on-?site|100% on-?site"
+    r"|#LI[- ](hybrid|on-?site))\b", re.I)
+
+
+def contradicts_remote(title=None, location=None, description=None):
+    """True when the title, location or description clearly says hybrid/on-site."""
+    for text in (title, location):
+        if text and (_HYBRID.search(text) or re.search(r"\bon-?site\b", text, re.I)):
+            return True
+    return bool(description and _NOT_REMOTE.search(description))
+
+
 def normalize(value):
     """Map a platform's value ('Hybrid', 'REMOTE', 'Office', 'OnSite', 'TELECOMMUTE'...) to remote/hybrid/onsite."""
     if not value:

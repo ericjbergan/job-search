@@ -347,3 +347,272 @@ class WorkModeTests(FreshDbTest):
             self.assertEqual(len(self.client.get(f"/api/jobs?work_mode={mode}").get_json()), expect, mode)
         onsite = self.client.get("/api/jobs?work_mode=onsite").get_json()[0]
         self.assertEqual(onsite["work_mode_source"], "description")
+
+
+class AreaFilterTests(FreshDbTest):
+    LOCS = boards.split_terms("columbus, new albany, dublin oh")
+
+    def job(self, loc, remote=False, desc="", title="Business Analyst"):
+        return {"job_id": loc + title + desc, "job_title": title, "employer_name": "Acme",
+                "job_location": loc, "job_is_remote": remote, "job_description": desc}
+
+    def test_in_area_rules(self):
+        keep = [self.job("Columbus, OH"), self.job("Dublin, Ohio"), self.job("Anywhere", True),
+                self.job("", False), self.job("Anywhere", True, "Great benefits incl. on-site wellness center")]
+        drop = [self.job("San Francisco, CA"),
+                self.job("San Francisco, CA", True, "This is a hybrid role with 3 days a week in the office."),
+                self.job("Anywhere", True, "Hybrid schedule required. #LI-Hybrid"),
+                self.job("Austin, TX", True, title="Business Analyst (Hybrid)"),
+                self.job("Remote India", True)]
+        for j in keep:
+            self.assertTrue(boards.in_area(j, self.LOCS), j)
+        for j in drop:
+            self.assertFalse(boards.in_area(j, self.LOCS), j)
+        # A local hybrid job is fine.
+        self.assertTrue(boards.in_area(self.job("Columbus, OH", True, "This is a hybrid role."), self.LOCS))
+
+    def test_search_run_skips_out_of_area(self):
+        sid = self.client.post("/api/searches", json={"query": "business analyst", "remote_only": True}).get_json()["id"]
+        results = [self.job("Anywhere", True), self.job("Los Angeles, CA"),
+                   self.job("Denver, CO", True, "This role is hybrid, 2 days per week in the office.")]
+        with mock.patch("jobsearch.jsearch.search", return_value=(results, 1)):
+            body = self.client.post(f"/api/searches/{sid}/run").get_json()
+        self.assertEqual((body["found"], body["outside_area"], body["new"]), (1, 2, 1))
+
+    def test_one_off_search_keeps_its_own_city(self):
+        results = [self.job("Chicago, IL"), self.job("Boston, MA")]
+        with mock.patch("jobsearch.jsearch.search", return_value=(results, 1)):
+            body = self.client.post("/api/search", json={"query": "business analyst", "location": "Chicago, IL"}).get_json()
+        self.assertEqual((body["found"], body["outside_area"]), (1, 1))
+
+
+class BenefitsTests(FreshDbTest):
+    def test_posting_tags(self):
+        from jobsearch.benefits import tags_from_text
+        text = ("We offer a 401(k) with a 6% company match, 15 days of paid time off, 10 paid holidays, "
+                "an annual bonus, tuition reimbursement and 12 weeks paid parental leave.")
+        self.assertEqual([t["label"] for t in tags_from_text(text)],
+                         ["401(k) match 6%", "15 days PTO", "10 holidays", "Bonus", "12 wks parental leave", "Tuition help"])
+        self.assertEqual(tags_from_text("Benefits include on-site wellness centers and a retirement savings plan."), [])
+
+    def test_company_key_matches_variants(self):
+        from jobsearch.benefits import company_key
+        self.assertEqual(company_key("JPMorgan Chase & Co."), company_key("JPMorgan Chase"))
+        self.assertEqual(company_key("American Electric Power (AEP)"), company_key("American Electric Power"))
+        self.assertEqual(company_key("Nationwide Children's"), company_key("Nationwide Childrens"))
+
+    def test_seeded_scores_and_save_validation(self):
+        os.remove(os.environ["JOBSEARCH_DB"])
+        db.init_db()
+        aep = db.get_benefits("American Electric Power")
+        self.assertEqual((aep["retirement_score"], aep["pto_score"], aep["commute_score"], aep["bonus_score"]), (2.75, 2, 1, 3))
+        self.assertIn("4.5% 401k match", aep["notes"])
+        osu = next(c for c in self.client.get("/api/companies").get_json() if c["name"] == "OSU")
+        self.assertEqual(osu["benefits"]["retirement_score"], 4)
+        self.assertEqual(self.client.put("/api/benefits", json={"company": "OSU", "pto_score": "9"}).status_code, 400)
+        r = self.client.put("/api/benefits", json={"company": "Brand New Co", "bonus_score": "3", "notes": "x"})
+        self.assertEqual(r.get_json()["bonus_score"], 3)
+
+    def test_page_facts_must_quote_the_page(self):
+        from jobsearch import benefits
+        page = "Our 401(k) plan matches 100% of the first 6% you contribute. Employees get 20 days of PTO."
+        answer = {"facts": [
+            {"topic": "retirement_match", "summary": "6% match", "quote": "matches 100% of the first 6% you contribute"},
+            {"topic": "pto", "summary": "30 days PTO", "quote": "Employees get 30 days of PTO"},  # not on the page
+        ], "scores": {"retirement": 4, "pto": 1, "bonus": None}}
+        fake = mock.MagicMock()
+        fake.chat.completions.create.return_value.choices = [mock.MagicMock(message=mock.MagicMock(content=json.dumps(answer)))]
+        with mock.patch.object(benefits, "_client", return_value=fake):
+            data = benefits._from_pages("Acme", [("https://acme.com/benefits", page)])
+        self.assertEqual([f["summary"] for f in data["facts"]], ["6% match"])
+        self.assertTrue(data["facts"][0]["verified"])
+
+    def test_lookup_from_unsaved_job_company(self):
+        from jobsearch import benefits
+        db.save_results([{"job_id": "j1", "job_title": "Business Analyst", "employer_name": "Startup Corp",
+                          "job_apply_link": "https://startup.example/jobs/1",
+                          "job_description": "Great team. 401(k) with 4% match."}])
+        job_id = db.list_jobs()[0]["id"]
+        result = {"facts": [{"topic": "retirement_match", "summary": "4% match", "quote": "401(k) with 4% match.",
+                             "source_url": "(this job posting)", "verified": True}],
+                  "scores": {"retirement": 1}, "score_reasons": {"retirement": "4% or less"}, "method": "pages", "sources": []}
+        with mock.patch.object(benefits, "lookup", return_value=result) as lk:
+            r = self.client.post("/api/benefits/lookup", json={"job_id": job_id})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(lk.call_args.args[0], "Startup Corp")
+        self.assertIn("https://startup.example/jobs/1", lk.call_args.kwargs["start_urls"])
+        body = r.get_json()
+        self.assertEqual((body["company_name"], body["ai_lookups_this_month"]), ("Startup Corp", 1))
+        self.assertEqual(body["retirement_score"], 1)  # empty box filled from the calculation
+        self.assertEqual(body["filled"], ["retirement"])
+        job = self.client.get(f"/api/jobs/{job_id}").get_json()
+        self.assertEqual(job["company_benefits"]["lookup"]["scores"]["retirement"], 1)
+        self.assertEqual([t["label"] for t in job["benefit_tags"]], ["401(k) match 4%"])
+
+
+class BenefitsFillerTests(unittest.TestCase):
+    def test_no_info_facts_dropped(self):
+        from jobsearch import benefits
+        web = {"facts": [{"topic": "retirement_match", "summary": "50% match up to 8%", "quote": "matches 50%", "source_url": "https://x.com"},
+                         {"topic": "pto", "summary": "Specific details about PTO are not provided.", "quote": "", "source_url": ""},
+                         {"topic": "bonus", "summary": "No information on bonuses", "quote": "n/a", "source_url": "https://x.com"}],
+               "scores": {"retirement": 4}}
+        with mock.patch.object(benefits, "find_benefit_pages", return_value=[]), \
+             mock.patch.object(benefits, "_from_web", return_value=web):
+            out = benefits.lookup("Acme")
+        self.assertEqual([f["topic"] for f in out["facts"]], ["retirement_match"])
+        self.assertEqual(out["method"], "web search")
+
+
+class MoreConnectorTests(FreshDbTest):
+    def test_detect_new_platforms(self):
+        d = boards.detect_ats
+        self.assertEqual(d("https://jobs.dayforcehcm.com/en-US/thg/ALLCAREERS"), ("dayforce", "thg/ALLCAREERS"))
+        self.assertEqual(d("https://jobs.dayforcehcm.com/drc/CANDIDATEPORTAL"), ("dayforce", "drc/CANDIDATEPORTAL"))
+        self.assertEqual(d("https://myjobs.adp.com/ecsfederal/cx/job-listing?rb=CareerSite"), ("adp_myjobs", "ecsfederal"))
+        self.assertEqual(d("https://pearson.jobs/locations/usa/jobs/"), ("jobsyn", "pearson.jobs"))
+        self.assertEqual(d("https://www.amazon.jobs/en/")[0], "amazon")
+
+    def test_state_only_location_is_kept(self):
+        locs = boards.split_terms("columbus, dublin oh")
+        job = {"job_title": "IT Business Analyst", "job_location": "OH"}
+        self.assertTrue(boards.location_matches(job, locs, allow_unknown=True))
+        self.assertTrue(boards.in_area(job, locs))
+        self.assertFalse(boards.location_matches({**job, "job_location": "Portland, OR"}, locs, allow_unknown=True))
+
+    def test_avature_page_parsing_and_paging(self):
+        def page(ids):
+            return "".join(
+                f'<h3 class="article__header__text__title"><a href="https://x.example/en_US/careers/JobDetail/BA/{i}">'
+                f' Business Analyst {i} </a></h3> <div class="article__header__text__subtitle"><span>Deloitte</span> | '
+                f'<span>Columbus, Ohio, United States</span></div>' for i in ids)
+        pages = [page(range(1, 11)), page(range(11, 16)), page(range(11, 16))]
+        resp = [mock.MagicMock(text=p) for p in pages]
+        with mock.patch.object(boards, "_request", side_effect=resp):
+            jobs = boards.fetch_avature("x.example/en_US/careers", "Deloitte", "business analyst")
+        self.assertEqual(len(jobs), 15)
+        self.assertEqual((jobs[0]["job_title"], jobs[0]["job_location"], jobs[0]["job_req_id"]),
+                         ("Business Analyst 1", "Columbus, Ohio, United States", "1"))
+
+    def test_existing_db_upgraded_to_new_connectors(self):
+        db.add_company({"name": "Pearson", "ats": "search"})
+        db.add_company({"name": "Deloitte", "ats": "lever", "ats_token": "mine"})  # set by hand: leave alone
+        db.upgrade_seed_connectors()
+        by_name = {c["name"]: c for c in db.list_companies()}
+        self.assertEqual((by_name["Pearson"]["ats"], by_name["Pearson"]["ats_token"]), ("jobsyn", "pearson.jobs"))
+        self.assertEqual(by_name["Deloitte"]["ats"], "lever")
+
+
+class ScoreCalculationTests(FreshDbTest):
+    def calc(self, work_mode=None, **figures):
+        from jobsearch.benefits import calculate_scores, _clean_figures
+        return calculate_scores(_clean_figures(figures), work_mode=work_mode)[0]
+
+    def test_retirement(self):
+        self.assertEqual(self.calc(employer_match_pct=6)["retirement"], 4)
+        self.assertEqual(self.calc(employer_match_pct="5%")["retirement"], 3)
+        self.assertEqual(self.calc(employer_match_pct=4.5)["retirement"], 1)
+        self.assertEqual(self.calc(employer_match_pct=3, pension=True)["retirement"], 4)
+        self.assertEqual(self.calc()["retirement"], 2)
+
+    def test_pto_counts_sick_days(self):
+        self.assertEqual(self.calc(unlimited_pto=True)["pto"], 4)
+        self.assertEqual(self.calc(pto_days=20, sick_days=10)["pto"], 4)
+        self.assertEqual(self.calc(pto_days=25)["pto"], 3)
+        self.assertEqual(self.calc(pto_days=15, sick_days=5)["pto"], 1)
+        self.assertEqual(self.calc()["pto"], 2)
+
+    def test_bonus(self):
+        self.assertEqual(self.calc(bonus=True, bonus_target_pct=15)["bonus"], 4)
+        self.assertEqual(self.calc(bonus="yes")["bonus"], 3)
+        self.assertEqual(self.calc(bonus_target_pct=5)["bonus"], 3)
+        self.assertEqual(self.calc(bonus=False)["bonus"], 1)
+        self.assertEqual(self.calc()["bonus"], 2)
+
+    def test_commute_only_when_clear(self):
+        self.assertEqual(self.calc(work_mode="remote")["commute"], 4)
+        self.assertEqual(self.calc(work_mode=None)["commute"], 3)
+        self.assertNotIn("commute", self.calc(work_mode="hybrid"))
+        self.assertNotIn("commute", self.calc(work_mode="company"))
+
+    def test_lookup_keeps_her_scores(self):
+        from jobsearch import benefits
+        db.save_benefits("Acme", {"retirement_score": 2.75})
+        result = {"facts": [], "figures": {}, "scores": {"retirement": 4, "pto": 3, "bonus": 2},
+                  "score_reasons": {}, "method": "pages", "sources": []}
+        with mock.patch.object(benefits, "lookup", return_value=result):
+            body = self.client.post("/api/benefits/lookup", json={"company": "Acme"}).get_json()
+        self.assertEqual((body["retirement_score"], body["pto_score"], body["bonus_score"]), (2.75, 3, 2))
+        self.assertEqual(sorted(body["filled"]), ["bonus", "pto"])
+
+
+class FigureQuoteTests(unittest.TestCase):
+    def test_figures_need_real_quotes(self):
+        from jobsearch import benefits
+        page = "We offer a 401(k) 6% match and four weeks paid time off to start."
+        answer = {"facts": [], "figures": {"employer_match_pct": 6, "pension": False, "pto_days": 20, "bonus": True},
+                  "figure_quotes": {"employer_match_pct": "401(k) 6% match", "pension": "Not provided",
+                                    "pto_days": "four weeks paid time off to start", "bonus": "annual bonus up to 15%"}}
+        fake = mock.MagicMock()
+        fake.chat.completions.create.return_value.choices = [mock.MagicMock(message=mock.MagicMock(content=json.dumps(answer)))]
+        with mock.patch.object(benefits, "_client", return_value=fake):
+            data = benefits._from_pages("Acme", [("https://acme.com/benefits", page)])
+        # pension had no real quote; the bonus quote isn't on the page
+        self.assertEqual(data["figures"], {"employer_match_pct": 6, "pto_days": 20})
+
+
+class BonusQuoteTests(unittest.TestCase):
+    def test_referral_and_401k_not_bonus(self):
+        from jobsearch.benefits import _quoted_figures
+        for quote in ("Employee referral bonus program", "A discretionary 401k award is determined each year",
+                      "$5,000 sign-on bonus"):
+            figs, _ = _quoted_figures({"figures": {"bonus": True}, "figure_quotes": {"bonus": quote}}, lambda q: True)
+            self.assertEqual(figs, {}, quote)
+        figs, _ = _quoted_figures({"figures": {"bonus": True, "bonus_target_pct": 10},
+                                   "figure_quotes": {"bonus": "annual incentive plan", "bonus_target_pct": "target of 10%"}},
+                                  lambda q: True)
+        self.assertEqual(figs, {"bonus": True, "bonus_target_pct": 10})
+
+
+class SaveCompanyFromJobTests(FreshDbTest):
+    def add_job(self, job_id, company, link):
+        db.save_results([{"job_id": job_id, "job_title": "Business Analyst", "employer_name": company,
+                          "job_apply_link": link, "job_publisher": "LinkedIn"}])
+        return next(j["id"] for j in db.list_jobs() if j["company"] == company)
+
+    def test_save_from_job_board_listing(self):
+        jid = self.add_job("a", "Startup Corp", "https://www.linkedin.com/jobs/view/123")
+        self.add_job("b", "Startup Corp.", "https://www.linkedin.com/jobs/view/456")  # same employer, other spelling
+        self.assertIsNone(self.client.get("/api/jobs").get_json()[0]["saved_company_id"])
+
+        r = self.client.post(f"/api/jobs/{jid}/save_company")
+        self.assertEqual(r.status_code, 201, r.get_json())
+        company = r.get_json()
+        self.assertEqual((company["name"], company["ats"], company["careers_url"]), ("Startup Corp", "search", None))
+        self.assertEqual(company["keywords"], "business analyst")
+        # Both of that employer's jobs now belong to the new company, and no longer offer the button.
+        jobs = self.client.get(f"/api/jobs?company_id={company['id']}").get_json()
+        self.assertEqual(len(jobs), 2)
+        self.assertTrue(all(j["saved_company_id"] == company["id"] for j in jobs))
+        self.assertEqual(self.client.post(f"/api/jobs/{jid}/save_company").status_code, 400)
+
+    def test_save_uses_direct_board_when_link_is_one(self):
+        jid = self.add_job("c", "Acme", "https://acme.wd5.myworkdayjobs.com/en-US/Careers/job/Columbus/BA_R1")
+        company = self.client.post(f"/api/jobs/{jid}/save_company").get_json()
+        self.assertEqual((company["ats"], company["ats_token"]), ("workday", "acme.wd5.myworkdayjobs.com/acme/Careers"))
+
+    def test_already_saved_company_flagged(self):
+        db.add_company({"name": "JPMorgan Chase", "ats": "search"})
+        self.add_job("d", "JPMorgan Chase & Co.", "https://www.indeed.com/viewjob?jk=1")
+        self.assertIsNotNone(self.client.get("/api/jobs").get_json()[0]["saved_company_id"])
+
+
+class RenameLinksJobsTests(FreshDbTest):
+    def test_rename_picks_up_matching_jobs(self):
+        cid = db.add_company({"name": "Huntington Bank", "ats": "search"})
+        db.save_results([{"job_id": "h1", "job_title": "Business Analyst", "employer_name": "Huntington"}])
+        self.assertIsNone(self.client.get("/api/jobs").get_json()[0]["saved_company_id"])
+        r = self.client.patch(f"/api/companies/{cid}", json={"name": "Huntington"})
+        self.assertEqual(r.get_json()["name"], "Huntington")
+        self.assertEqual(self.client.get("/api/jobs").get_json()[0]["saved_company_id"], cid)
+        self.assertEqual(len(self.client.get(f"/api/jobs?company_id={cid}").get_json()), 1)

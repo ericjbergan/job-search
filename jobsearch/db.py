@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from jobsearch import pay, workmode
+from jobsearch import benefits as benefits_mod, pay, workmode
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB_PATH = os.path.join(REPO_DIR, "jobs.db")
@@ -46,6 +46,31 @@ CREATE TABLE IF NOT EXISTS companies (
     notes           TEXT,
     created_at      TEXT NOT NULL,
     last_checked_at TEXT
+);
+
+-- Benefits per employer, keyed by a normalized company name so any job's company
+-- can have one (not just saved companies). Scores use the spreadsheet's 1-4 scales.
+CREATE TABLE IF NOT EXISTS benefits (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_key      TEXT NOT NULL UNIQUE,
+    company_name     TEXT NOT NULL,
+    retirement_score REAL,
+    pto_score        REAL,
+    commute_score    REAL,
+    bonus_score      REAL,
+    notes            TEXT,
+    benefits_url     TEXT,
+    lookup_json      TEXT,
+    looked_up_at     TEXT,
+    updated_at       TEXT NOT NULL
+);
+
+-- One row per ChatGPT benefits lookup, to show usage.
+CREATE TABLE IF NOT EXISTS ai_calls (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    called_at        TEXT NOT NULL,
+    kind             TEXT NOT NULL,
+    company          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -129,6 +154,8 @@ def init_db(seed_path=SEED_PATH):
         conn.executescript(SCHEMA)
         _migrate(conn)
     seed_db(seed_path)
+    seed_benefits(seed_path)
+    upgrade_seed_connectors(seed_path)
 
 
 def _migrate(conn):
@@ -165,6 +192,106 @@ def seed_db(seed_path=SEED_PATH):
         add_company({**defaults, **company})
     for search in seed.get("searches", []):
         add_search(search)
+
+
+def seed_benefits(seed_path=SEED_PATH):
+    """Load the spreadsheet's benefit scores once (separately, so existing databases get them too)."""
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM meta WHERE key = 'seeded_benefits'").fetchone():
+            return
+        conn.execute("INSERT INTO meta (key, value) VALUES ('seeded_benefits', ?)", (now_iso(),))
+    if not seed_path or not os.path.exists(seed_path):
+        return
+    with open(seed_path, encoding="utf-8") as f:
+        for row in json.load(f).get("benefits", []):
+            if not get_benefits(row["company"]):
+                save_benefits(row["company"], {k: row.get(k) for k in BENEFIT_FIELDS if k in row})
+
+
+def upgrade_seed_connectors(seed_path=SEED_PATH):
+    """When a newer seed file can search a company directly, switch existing databases over too.
+
+    Only touches companies that are still on JSearch, so a job board you set by hand
+    is never overwritten. Safe to run on every start.
+    """
+    if not seed_path or not os.path.exists(seed_path):
+        return
+    with open(seed_path, encoding="utf-8") as f:
+        seeded = {c["name"].lower(): c for c in json.load(f).get("companies", [])}
+    with connect() as conn:
+        for row in conn.execute("SELECT id, name FROM companies WHERE ats = 'search'").fetchall():
+            c = seeded.get(row["name"].lower())
+            if c and c.get("ats", "search") != "search":
+                conn.execute("UPDATE companies SET ats = ?, ats_token = ?, careers_url = ? WHERE id = ?",
+                             (c["ats"], c.get("ats_token"), c.get("careers_url"), row["id"]))
+
+
+# --- benefits ---------------------------------------------------------------
+
+BENEFIT_FIELDS = ("retirement_score", "pto_score", "commute_score", "bonus_score", "notes", "benefits_url")
+
+
+def _benefits_row(row):
+    if not row:
+        return None
+    d = dict(row)
+    d["lookup"] = json.loads(d.pop("lookup_json") or "null")
+    return d
+
+
+def get_benefits(company):
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM benefits WHERE company_key = ?",
+                           (benefits_mod.company_key(company),)).fetchone()
+    return _benefits_row(row)
+
+
+def benefits_by_key():
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM benefits").fetchall()
+    return {r["company_key"]: _benefits_row(r) for r in rows}
+
+
+def save_benefits(company, fields=None, lookup=None):
+    """Create or update a company's benefits. Only the given fields change."""
+    key = benefits_mod.company_key(company)
+    if not key:
+        raise ValueError("Company name is required")
+    updates = {k: fields[k] for k in BENEFIT_FIELDS if fields and k in fields}
+    for k in ("retirement_score", "pto_score", "commute_score", "bonus_score"):
+        if k in updates:
+            v = updates[k]
+            try:
+                updates[k] = None if v in (None, "") else float(v)
+            except (TypeError, ValueError):
+                raise ValueError(f"{k.replace('_score', '').capitalize()} score must be a number")
+            if updates[k] is not None and not 0 <= updates[k] <= 4:
+                raise ValueError("Scores go from 0 to 4")
+    if lookup is not None:
+        updates["lookup_json"] = json.dumps(lookup)
+        updates["looked_up_at"] = now_iso()
+    updates["updated_at"] = now_iso()
+    with connect() as conn:
+        exists = conn.execute("SELECT 1 FROM benefits WHERE company_key = ?", (key,)).fetchone()
+        if exists:
+            conn.execute(f"UPDATE benefits SET {', '.join(f'{k} = ?' for k in updates)} WHERE company_key = ?",
+                         list(updates.values()) + [key])
+        else:
+            cols = ["company_key", "company_name", *updates]
+            conn.execute(f"INSERT INTO benefits ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                         [key, company, *updates.values()])
+    return get_benefits(company)
+
+
+def record_ai_call(kind, company):
+    with connect() as conn:
+        conn.execute("INSERT INTO ai_calls (called_at, kind, company) VALUES (?, ?, ?)", (now_iso(), kind, company))
+
+
+def ai_calls_this_month():
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM ai_calls WHERE substr(called_at, 1, 7) = ?", (month,)).fetchone()[0]
 
 
 # --- searches ---------------------------------------------------------------
@@ -248,6 +375,16 @@ def add_company(fields):
             return cur.lastrowid
     except sqlite3.IntegrityError:
         raise ValueError(f"{fields.get('name')} is already in your company list")
+
+
+def link_jobs_to_company(company_id, key):
+    """Attach already-saved jobs from this employer (matched by normalized name) to a company."""
+    with connect() as conn:
+        rows = conn.execute("SELECT id, company FROM jobs WHERE company_id IS NULL").fetchall()
+        ids = [r["id"] for r in rows if benefits_mod.company_key(r["company"] or "") == key]
+        for job_id in ids:
+            conn.execute("UPDATE jobs SET company_id = ? WHERE id = ?", (company_id, job_id))
+    return len(ids)
 
 
 def update_company(company_id, fields):

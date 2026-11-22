@@ -4,6 +4,7 @@ const state = {
     status: '',          // '' = all statuses
     searchId: null,      // filter jobs to one saved search
     companyId: null,     // ...or to one company (only one of the two at a time)
+    selectedCompanies: new Set(),  // ticked in the company list, for "Check selected"
     statuses: [],
     searches: [],
     companies: [],
@@ -119,6 +120,11 @@ async function loadMeta() {
     state.atsHints = meta.ats_token_hints;
     state.priorities = meta.priorities;
     state.companyDefaults = meta.company_defaults;
+    state.benefitScales = meta.benefit_scales;
+    state.benefitTopicOrder = meta.benefit_topics.map(([key]) => key);
+    state.benefitTopics = Object.fromEntries(meta.benefit_topics);
+    state.hasOpenAI = meta.has_openai_key;
+    state.aiLookups = meta.ai_lookups_this_month;
     renderStatusTabs(meta.status_counts);
     renderUsage(meta.pages_used_this_month);
     if (!meta.has_api_key) showMessage('No JSEARCH_API_KEY in .env, so searches will fail until it is added.', true);
@@ -183,7 +189,8 @@ function formParams() {
 
 function reportRun(result) {
     renderUsage(result.pages_used_this_month);
-    showMessage(`Found ${result.found} jobs: ${result.new} new, ${result.already_saved} already saved.`);
+    const skipped = result.outside_area ? ` Skipped ${result.outside_area} outside the Columbus area (or not really remote).` : '';
+    showMessage(`Found ${result.found} jobs: ${result.new} new, ${result.already_saved} already saved.${skipped}`);
 }
 
 async function withBusy(button, fn) {
@@ -256,13 +263,46 @@ function filterBySearch(searchId) {
 
 // --- companies ---------------------------------------------------------------
 
+// Company list order; remembered in this browser only (a viewing preference, not data).
+function getCompanySort() {
+    try { return localStorage.getItem('companySort') || 'priority'; } catch (e) { return 'priority'; }
+}
+
+function setCompanySort(value) {
+    try { localStorage.setItem('companySort', value); } catch (e) { /* private window etc. */ }
+    loadCompanies();
+}
+
+// Retirement + PTO + Bonus, her three benefit ratings (commute depends on the job, not the company).
+function benefitsTotal(c) {
+    const b = c.benefits || {};
+    const parts = [b.retirement_score, b.pto_score, b.bonus_score].filter(v => v !== null && v !== undefined);
+    return parts.length ? parts.reduce((a, v) => a + v, 0) : null;
+}
+
+function sortCompanies(companies, how) {
+    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    if (how === 'name') return companies.sort(byName);
+    if (how === 'score') {
+        return companies.sort((a, b) => {
+            const sa = benefitsTotal(a), sb = benefitsTotal(b);
+            if (sa === null || sb === null) return (sa === null) - (sb === null) || byName(a, b);
+            return sb - sa || byName(a, b);
+        });
+    }
+    return companies;  // the server already sorts by priority, then name
+}
+
 async function loadCompanies() {
-    state.companies = await api('/api/companies');
+    const how = getCompanySort();
+    document.getElementById('companySort').value = how;
+    state.companies = sortCompanies(await api('/api/companies'), how);
     const list = document.getElementById('companyList');
     if (state.companies.length === 0) {
         list.innerHTML = '<li class="empty">No companies yet. Click + Add.</li>';
         return;
     }
+    updateCheckSelectedButton();
     list.innerHTML = state.companies.map(c => {
         const bits = [
             c.priority ? (state.priorities[c.priority] || `P${c.priority}`) : '',
@@ -271,11 +311,14 @@ async function loadCompanies() {
         ].filter(Boolean).join(' · ');
         return `
         <li class="${c.id === state.companyId ? 'active' : ''}" onclick="filterByCompany(${c.id})" title="${esc(c.notes || '')}">
-            <div class="saved-name">${esc(c.name)}<span class="ats-tag ${c.ats === 'search' ? 'quota' : ''}">${esc(state.atsLabels[c.ats] || c.ats)}</span></div>
+            <div class="saved-name"><input type="checkbox" class="pick" ${state.selectedCompanies.has(c.id) ? 'checked' : ''}
+                onclick="event.stopPropagation(); toggleCompanySelected(${c.id}, this.checked)" aria-label="Select ${esc(c.name)}">${esc(c.name)}<span class="ats-tag ${c.ats === 'search' ? 'quota' : ''}">${esc(state.atsLabels[c.ats] || c.ats)}</span></div>
+            ${scoreLine(c.benefits)}
             <div class="saved-meta">${esc(bits)}<br>
                 ${c.job_count} job${c.job_count === 1 ? '' : 's'} · ${c.last_checked_at ? 'checked ' + esc(relativeDate(c.last_checked_at)) : 'never checked'}</div>
             <div class="saved-actions">
                 <button class="small" onclick="event.stopPropagation(); checkCompany(${c.id}, this)">Check</button>
+                <button class="small secondary" onclick="event.stopPropagation(); openBenefits(${esc(JSON.stringify(c.name))})">Benefits</button>
                 <button class="small secondary" onclick="event.stopPropagation(); editCompany(${c.id})">Edit</button>
                 <button class="small danger" onclick="event.stopPropagation(); deleteCompany(${c.id})">Delete</button>
             </div>
@@ -382,15 +425,56 @@ async function checkCompany(companyId, button) {
     });
 }
 
-async function checkAllCompanies(button) {
+function toggleCompanySelected(companyId, checked) {
+    if (checked) state.selectedCompanies.add(companyId);
+    else state.selectedCompanies.delete(companyId);
+    updateCheckSelectedButton();
+}
+
+function selectCompanies(which) {
+    state.selectedCompanies = new Set(state.companies
+        .filter(c => which === 'all' || (which === 'free' && c.ats !== 'search'))
+        .map(c => c.id));
+    loadCompanies();
+}
+
+function updateCheckSelectedButton() {
+    // Drop ticks for companies that were deleted.
+    const ids = new Set(state.companies.map(c => c.id));
+    state.selectedCompanies.forEach(id => { if (!ids.has(id)) state.selectedCompanies.delete(id); });
+    const btn = document.getElementById('checkSelectedBtn');
+    const n = state.selectedCompanies.size;
+    btn.textContent = n ? `Check selected (${n})` : 'Check selected';
+    btn.disabled = n === 0;
+}
+
+function checkAllCompanies(button) {
     if (state.companies.length === 0) return showMessage('Add a company first.', true);
-    // Direct career-site checks are free; JSearch ones cost a request each, so they're opt-in.
-    const quotaCompanies = state.companies.filter(c => c.ats === 'search');
-    const includeQuota = quotaCompanies.length > 0 && confirm(
-        `${state.companies.length - quotaCompanies.length} companies are checked directly on their career sites (free).\n\n` +
-        `${quotaCompanies.length} more can only be checked through JSearch, about 1 API request each.\n\n` +
-        `OK = check all of them   ·   Cancel = only the free ones`);
-    const toCheck = state.companies.filter(c => c.ats !== 'search' || includeQuota);
+    return checkCompanies(state.companies, button, true);
+}
+
+function checkSelectedCompanies(button) {
+    const picked = state.companies.filter(c => state.selectedCompanies.has(c.id));
+    if (picked.length === 0) return showMessage('Tick the companies to check first.', true);
+    return checkCompanies(picked, button, false);
+}
+
+async function checkCompanies(companies, button, askAboutQuota) {
+    // Direct career-site checks are free; JSearch ones cost a request each.
+    const quotaCompanies = companies.filter(c => c.ats === 'search');
+    let includeQuota = true;
+    if (quotaCompanies.length && askAboutQuota) {
+        includeQuota = confirm(
+            `${companies.length - quotaCompanies.length} companies are checked directly on their career sites (free).\n\n` +
+            `${quotaCompanies.length} more can only be checked through JSearch, about 1 API request each.\n\n` +
+            `OK = check all of them   ·   Cancel = only the free ones`);
+    } else if (quotaCompanies.length) {
+        // She picked these on purpose; just confirm the cost.
+        includeQuota = confirm(`${quotaCompanies.length} of the selected companies use JSearch ` +
+            `(about 1 API request each): ${quotaCompanies.map(c => c.name).join(', ')}.\n\nOK = include them   ·   Cancel = skip them`);
+    }
+    const toCheck = companies.filter(c => c.ats !== 'search' || includeQuota);
+    if (toCheck.length === 0) return;
     await withBusy(button, async () => {
         let found = 0, added = 0, failed = [];
         for (const c of toCheck) {
@@ -475,6 +559,8 @@ function renderJobSummary(job) {
                     <button class="flag ${interested ? 'on interested' : ''}" onclick="toggleFlag(event, ${job.id}, 'interested', '${esc(job.status)}')">★ Interested</button>
                     <button class="flag ${applied ? 'on applied' : ''}" onclick="toggleFlag(event, ${job.id}, 'applied', '${esc(job.status)}')">✓ Applied</button>
                     <button class="flag ${notFit ? 'on not-fit' : ''}" onclick="toggleFlag(event, ${job.id}, 'not_a_fit', '${esc(job.status)}')">✕ Not a fit</button>
+                    ${job.company ? `<button class="flag benefits-btn" title="Benefits at ${esc(job.company)}" onclick="event.stopPropagation(); openBenefits(${esc(JSON.stringify(job.company))}, ${job.id})">$ Benefits</button>` : ''}
+                    ${job.company && !job.saved_company_id ? `<button class="flag save-co-btn" title="Add ${esc(job.company)} to your saved companies" onclick="saveJobCompany(event, ${job.id})">+ Save company</button>` : ''}
                 </div>
             </div>
             <div class="job-side">
@@ -521,6 +607,7 @@ async function openJob(jobId, closeOthers) {
             </label>
             <button class="small" onclick="updateJob(${job.id}, { notes: document.getElementById('notes-${job.id}').value })">Save notes</button>
         </div>
+        ${jobBenefitsHtml(job)}
         <div class="description">${esc(job.description || 'No description provided.')}</div>
         <div class="detail-meta">
             ${job.req_number ? `Req # ${esc(job.req_number)} · ` : ''}
@@ -573,3 +660,176 @@ async function refreshAll() {
 }
 
 refreshAll().catch(e => showMessage(e.message, true));
+
+
+async function saveJobCompany(event, jobId) {
+    event.stopPropagation();
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+        const company = await api(`/api/jobs/${jobId}/save_company`, { method: 'POST' });
+        const how = company.ats === 'search'
+            ? 'It will be checked through JSearch (about 1 request per check). If you find its careers page, click Edit and paste the link to check it directly for free.'
+            : `It will be checked directly on its ${state.atsLabels[company.ats] || company.ats} careers site (free).`;
+        showMessage(`Added ${company.name} to your companies. ${how}`);
+        await refreshAll();
+    } catch (e) {
+        showMessage(e.message, true);
+        button.disabled = false;
+    }
+}
+
+// --- benefits ------------------------------------------------------------------
+
+const SCORE_KEYS = ['retirement', 'pto', 'commute', 'bonus'];
+const SCORE_SHORT = { retirement: 'Ret', pto: 'PTO', commute: 'Commute', bonus: 'Bonus' };
+
+function fmtScore(v) {
+    return v === null || v === undefined ? '' : String(+v);
+}
+
+// "Ret 4 · PTO 2 · Commute 1 · Bonus 3" under a company name; nothing if no scores yet.
+function scoreLine(b) {
+    if (!b) return '';
+    const parts = SCORE_KEYS.filter(k => b[`${k}_score`] !== null && b[`${k}_score`] !== undefined)
+        .map(k => `${SCORE_SHORT[k]} ${fmtScore(b[`${k}_score`])}`);
+    return parts.length ? `<div class="score-line">${esc(parts.join(' · '))}</div>` : '';
+}
+
+function jobBenefitsHtml(job) {
+    const tags = job.benefit_tags || [];
+    const b = job.company_benefits;
+    const chips = b ? SCORE_KEYS.filter(k => b[`${k}_score`] !== null && b[`${k}_score`] !== undefined)
+        .map(k => `<span class="score-chip">${SCORE_SHORT[k]} ${esc(fmtScore(b[`${k}_score`]))}</span>`).join('') : '';
+    const facts = b && b.lookup ? b.lookup.facts.length : 0;
+    const company = job.company || '';
+    return `
+        <div class="tag-row">
+            <strong style="font-size:13px">In this posting:</strong>
+            ${tags.length ? tags.map(t => `<span class="benefit-tag" title="${esc(t.quote)}">${esc(t.label)}</span>`).join('')
+                          : '<span class="hint-inline" style="margin:0">no benefits mentioned</span>'}
+        </div>
+        ${company ? `<div class="benefit-summary">
+            <strong>${esc(company)} benefits:</strong>
+            ${chips || '<span class="hint-inline" style="margin:0">no scores yet</span>'}
+            ${facts ? `<span class="hint-inline" style="margin:0">${facts} fact${facts === 1 ? '' : 's'} found</span>` : ''}
+            <button class="small secondary" onclick="openBenefits(${esc(JSON.stringify(company))}, ${job.id})">Benefits…</button>
+        </div>` : ''}`;
+}
+
+const benefitsState = { company: null, jobId: null, record: null };
+
+function bMessage(text, isError = false) {
+    const el = document.getElementById('bMessage');
+    el.textContent = text;
+    el.classList.toggle('error', isError);
+    el.classList.toggle('hidden', !text);
+}
+
+async function openBenefits(company, jobId = null) {
+    benefitsState.company = company;
+    benefitsState.jobId = jobId;
+    document.getElementById('bTitle').textContent = `${company} — benefits`;
+    bMessage('');
+    document.getElementById('benefitsModal').classList.remove('hidden');
+    renderBenefits(await api(`/api/benefits?company=${encodeURIComponent(company)}`));
+}
+
+function closeBenefits() {
+    document.getElementById('benefitsModal').classList.add('hidden');
+    refreshAll().then(() => { if (state.openJobId) openJob(state.openJobId, false); });
+}
+
+function renderBenefits(record) {
+    benefitsState.record = record;
+    const lookup = record.lookup || {};
+    const suggested = lookup.scores || {}, reasons = lookup.score_reasons || {};
+    document.getElementById('bScores').innerHTML = SCORE_KEYS.map(k => {
+        const scale = state.benefitScales[k];
+        const levels = Object.entries(scale.levels).sort((a, b) => b[0] - a[0]).map(([n, d]) => `${n} ${d}`).join(' · ');
+        const sug = suggested[k];
+        return `<label>${esc(scale.label)}
+            <input type="number" id="bScore-${k}" min="0" max="4" step="0.25" value="${esc(fmtScore(record[`${k}_score`]))}">
+            <div class="scale">${esc(levels)}</div>
+            ${sug !== undefined && sug !== null ? `<div class="suggest">Calculated: <strong>${esc(fmtScore(sug))}</strong>
+                ${+sug !== +record[`${k}_score`] ? `<a onclick="document.getElementById('bScore-${k}').value='${esc(fmtScore(sug))}'">use</a>` : '✓'}
+                <div class="reason">${esc(reasons[k] || '')}</div></div>`
+              : (k === 'commute' && record.looked_up_at ? '<div class="suggest"><div class="reason">Hybrid/on-site depends on the drive — rate it yourself</div></div>' : '')}
+        </label>`;
+    }).join('');
+    document.getElementById('bNotes').value = record.notes || '';
+    document.getElementById('bUrl').value = record.benefits_url || '';
+
+    const btn = document.getElementById('bLookupBtn');
+    btn.disabled = !state.hasOpenAI;
+    document.getElementById('bLookupHint').textContent = state.hasOpenAI
+        ? `Uses ChatGPT (a few cents with web search) · ${state.aiLookups} lookup${state.aiLookups === 1 ? '' : 's'} this month`
+        : 'Add OPENAI_API_KEY to .env to enable lookups';
+
+    const facts = lookup.facts || [];
+    if (!record.looked_up_at) {
+        document.getElementById('bFacts').innerHTML = '<p class="hint-inline" style="margin:12px 0 0">Not looked up yet.</p>';
+        return;
+    }
+    const groups = {};
+    facts.forEach(f => (groups[f.topic] = groups[f.topic] || []).push(f));
+    const order = state.benefitTopicOrder;
+    document.getElementById('bFacts').innerHTML = `
+        <h3>Found ${esc(shortDate(record.looked_up_at))} <span class="hint-inline">via ${esc(lookup.method || '')}</span></h3>
+        ${facts.length ? '' : '<p class="hint-inline" style="margin:0">Nothing specific found. Try adding the company\'s benefits page link above and look up again.</p>'}
+        ${order.filter(t => groups[t]).map(t => `
+            <div class="fact-group"><h4>${esc(state.benefitTopics[t])}</h4>
+            ${groups[t].map(f => {
+                const url = safeUrl(f.source_url);
+                return `<div class="fact ${f.verified ? '' : 'unverified'}">
+                    ${esc(f.summary)}
+                    ${f.quote ? `<blockquote>“${esc(f.quote)}”</blockquote>` : ''}
+                    <div class="src">${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${esc(new URL(f.source_url).hostname)}</a>` : esc(f.source_url || '')}
+                        · ${f.verified ? 'quote checked against the page' : 'from web search — verify'}</div>
+                </div>`;
+            }).join('')}</div>`).join('')}`;
+}
+
+function benefitsForm() {
+    const body = { company: benefitsState.company, notes: document.getElementById('bNotes').value.trim(),
+                   benefits_url: document.getElementById('bUrl').value.trim() };
+    SCORE_KEYS.forEach(k => { body[`${k}_score`] = document.getElementById(`bScore-${k}`).value; });
+    return body;
+}
+
+async function saveBenefits(button) {
+    button.disabled = true;
+    try {
+        renderBenefits(await api('/api/benefits', { method: 'PUT', body: benefitsForm() }));
+        bMessage('Saved.');
+    } catch (e) {
+        bMessage(e.message, true);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function lookupBenefits(button) {
+    button.disabled = true;
+    button.textContent = 'Looking up… (up to a minute)';
+    bMessage('');
+    try {
+        // Save typed scores/notes first so the lookup result doesn't overwrite them on screen.
+        await api('/api/benefits', { method: 'PUT', body: benefitsForm() });
+        const record = await api('/api/benefits/lookup', { method: 'POST', body: {
+            company: benefitsState.company, job_id: benefitsState.jobId,
+            benefits_url: document.getElementById('bUrl').value.trim() } });
+        state.aiLookups = record.ai_lookups_this_month;
+        renderBenefits(record);
+        const filled = (record.filled || []).map(k => state.benefitScales[k].label);
+        const n = record.lookup.facts.length;
+        bMessage(`Found ${n} fact${n === 1 ? '' : 's'}. ` + (filled.length
+            ? `Filled in ${filled.join(', ')} from what was found. `
+            : '') + 'Scores you had already set were left as they were; calculated values are shown under each box.');
+    } catch (e) {
+        bMessage(e.message, true);
+    } finally {
+        button.disabled = !state.hasOpenAI;
+        button.textContent = 'Look up benefits';
+    }
+}

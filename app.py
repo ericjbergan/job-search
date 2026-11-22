@@ -10,7 +10,7 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import boards, db, jsearch
+from jobsearch import benefits, boards, db, jsearch
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -47,6 +47,10 @@ def api_meta():
         "company_defaults": db.company_defaults(),
         "pages_used_this_month": db.pages_used_this_month(),
         "has_api_key": bool(os.getenv("JSEARCH_API_KEY")),
+        "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
+        "benefit_scales": benefits.SCALES,
+        "benefit_topics": list(benefits.TOPICS.items()),  # a list keeps the display order
+        "ai_lookups_this_month": db.ai_calls_this_month(),
     })
 
 
@@ -73,6 +77,16 @@ def api_delete_search(search_id):
     return jsonify({"ok": True})
 
 
+def _search_area(location):
+    """Places a job-board result may be in: the usual Columbus-area list, plus the
+    search's own city (so a one-off "Chicago, IL" search still keeps Chicago jobs)."""
+    terms = boards.split_terms(db.company_defaults().get("locations"))
+    city = boards.norm((location or "").split(",")[0])
+    if city and city not in terms:
+        terms.append(city)
+    return terms
+
+
 def _run(params, search_id=None):
     try:
         results, pages = jsearch.search(
@@ -86,9 +100,12 @@ def _run(params, search_id=None):
     except jsearch.JSearchError as e:
         return _error(str(e), 502)
     db.record_api_call(pages, jsearch.build_query(params["query"], params.get("location")))
-    new_count, seen_count = db.save_results(results, search_id=search_id)
+    area = _search_area(params.get("location"))
+    kept = [j for j in results if boards.in_area(j, area)]
+    new_count, seen_count = db.save_results(kept, search_id=search_id)
     return jsonify({
-        "found": len(results),
+        "found": len(kept),
+        "outside_area": len(results) - len(kept),
         "new": new_count,
         "already_saved": seen_count,
         "pages_used_this_month": db.pages_used_this_month(),
@@ -140,7 +157,12 @@ def _company_fields(data):
 
 @app.route("/api/companies")
 def api_list_companies():
-    return jsonify(db.list_companies())
+    scores = db.benefits_by_key()
+    companies = db.list_companies()
+    for c in companies:
+        b = scores.get(benefits.company_key(c["name"])) or {}
+        c["benefits"] = {k: b.get(k) for k in ("retirement_score", "pto_score", "commute_score", "bonus_score")}
+    return jsonify(companies)
 
 
 @app.route("/api/companies", methods=["POST"])
@@ -166,7 +188,10 @@ def api_update_company(company_id):
         db.update_company(company_id, _company_fields(request.get_json() or {}))
     except ValueError as e:
         return _error(str(e))
-    return jsonify(db.get_company(company_id))
+    company = db.get_company(company_id)
+    # A rename can make job-board listings line up with this company ("Huntington Bank" -> "Huntington").
+    db.link_jobs_to_company(company_id, benefits.company_key(company["name"]))
+    return jsonify(company)
 
 
 @app.route("/api/companies/<int:company_id>", methods=["DELETE"])
@@ -199,7 +224,7 @@ def api_check_company(company_id):
 
 @app.route("/api/jobs")
 def api_list_jobs():
-    return jsonify(db.list_jobs(
+    jobs = db.list_jobs(
         status=request.args.get("status") or None,
         search_id=request.args.get("search_id", type=int),
         company_id=request.args.get("company_id", type=int),
@@ -208,7 +233,41 @@ def api_list_jobs():
         hide_not_fit=request.args.get("hide_not_fit") == "1",
         sort=request.args.get("sort") or "found",
         work_mode=request.args.get("work_mode") or None,
-    ))
+    )
+    # Flag jobs whose employer is already a saved company (by name, so job-board results count too).
+    saved = {benefits.company_key(c["name"]): c["id"] for c in db.list_companies()}
+    for j in jobs:
+        j["saved_company_id"] = j.get("company_id") or saved.get(benefits.company_key(j.get("company") or ""))
+    return jsonify(jobs)
+
+
+@app.route("/api/jobs/<int:job_id>/save_company", methods=["POST"])
+def api_save_job_company(job_id):
+    """Add a job's employer to the saved companies, guessing its job board from the listing link."""
+    job = db.get_job(job_id)
+    if not job:
+        return _error("Job not found", 404)
+    name = (job.get("company") or "").strip()
+    if not name:
+        return _error("This listing doesn't name a company")
+    key = benefits.company_key(name)
+    if any(benefits.company_key(c["name"]) == key for c in db.list_companies()):
+        return _error(f"{name} is already in your company list")
+
+    # If the listing links straight to the employer's job board (Workday, Greenhouse...), use it;
+    # job-board links (LinkedIn, Indeed...) aren't careers sites, so those start on JSearch.
+    ats, token = boards.detect_ats(job.get("apply_link"))
+    defaults = db.company_defaults()
+    fields = {"name": name, "ats": ats, "ats_token": token,
+              "careers_url": job.get("apply_link") if ats != "search" else None,
+              "keywords": defaults.get("keywords"), "locations": defaults.get("locations"),
+              "notes": "Added from a job search listing" + (f" ({job['publisher']})" if job.get("publisher") else "")}
+    try:
+        company_id = db.add_company(fields)
+    except ValueError as e:
+        return _error(str(e))
+    db.link_jobs_to_company(company_id, key)
+    return jsonify(db.get_company(company_id)), 201
 
 
 @app.route("/api/jobs/<int:job_id>")
@@ -216,7 +275,73 @@ def api_get_job(job_id):
     job = db.get_job(job_id)
     if not job:
         return _error("Job not found", 404)
+    job["benefit_tags"] = benefits.tags_from_text(job.get("description"))
+    job["company_benefits"] = db.get_benefits(job["company"]) if job.get("company") else None
     return jsonify(job)
+
+
+# --- benefits -----------------------------------------------------------------
+
+@app.route("/api/benefits")
+def api_get_benefits():
+    company = (request.args.get("company") or "").strip()
+    if not company:
+        return _error("Company is required")
+    return jsonify(db.get_benefits(company) or {"company_name": company, "lookup": None})
+
+
+@app.route("/api/benefits", methods=["PUT"])
+def api_save_benefits():
+    data = request.get_json() or {}
+    company = (data.get("company") or "").strip()
+    if not company:
+        return _error("Company is required")
+    try:
+        return jsonify(db.save_benefits(company, data))
+    except ValueError as e:
+        return _error(str(e))
+
+
+@app.route("/api/benefits/lookup", methods=["POST"])
+def api_lookup_benefits():
+    """Find a company's benefits from a job listing or a saved company (ChatGPT-assisted)."""
+    data = request.get_json() or {}
+    company = (data.get("company") or "").strip()
+    job = db.get_job(data["job_id"]) if data.get("job_id") else None
+    if job and not company:
+        company = job.get("company") or ""
+    if not company:
+        return _error("Company is required")
+
+    saved = db.get_benefits(company) or {}
+    benefits_url = (data.get("benefits_url") or "").strip() or saved.get("benefits_url")
+    start_urls = []
+    if job and job.get("apply_link"):
+        start_urls.append(job["apply_link"])
+    for c in db.list_companies():
+        if benefits.company_key(c["name"]) == benefits.company_key(company) and c.get("careers_url"):
+            start_urls.append(c["careers_url"])
+    try:
+        result = benefits.lookup(company, start_urls=start_urls, benefits_url=benefits_url,
+                                 posting_text=job.get("description") if job else None,
+                                 use_web=data.get("use_web", True),
+                                 work_mode=job.get("work_mode") if job else "company")
+    except benefits.BenefitsError as e:
+        return _error(str(e), 502)
+    except Exception as e:  # OpenAI/network errors
+        return _error(f"Benefits lookup failed: {e}", 502)
+    db.record_ai_call(result["method"], company)
+    fields = {"benefits_url": benefits_url} if benefits_url else {}
+    # Calculated scores fill only empty boxes; scores she already set are left alone.
+    filled = []
+    for key, score in result["scores"].items():
+        if saved.get(f"{key}_score") is None:
+            fields[f"{key}_score"] = score
+            filled.append(key)
+    record = db.save_benefits(company, fields, lookup=result)
+    record["filled"] = filled
+    record["ai_lookups_this_month"] = db.ai_calls_this_month()
+    return jsonify(record)
 
 
 @app.route("/api/jobs/<int:job_id>", methods=["PATCH"])
