@@ -191,7 +191,8 @@ def _client():
     if not os.getenv("OPENAI_API_KEY"):
         raise BenefitsError("Missing OPENAI_API_KEY in .env")
     from openai import OpenAI
-    return OpenAI()
+    # Extra retries: some home networks drop the first connection now and then.
+    return OpenAI(max_retries=5)
 
 
 def _parse_json(text):

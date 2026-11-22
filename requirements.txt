@@ -1,4 +1,6 @@
-Flask>=3.0.0
-requests>=2.31.0
-python-dotenv>=1.0.0
-openai>=1.40.0
+# Upper bounds are the newest major versions this app has been tested with;
+# a new major version (e.g. openai 3.x) can break things, so it's opt-in.
+Flask>=2.2,<4
+requests>=2.31,<3
+python-dotenv>=1.0,<2
+openai>=1.40,<3
