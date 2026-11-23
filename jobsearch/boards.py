@@ -730,7 +730,10 @@ def fetch_radancy(token, company_name, query, locations=None):
         if not a:
             continue
         href, job_id, title_html = a.groups()
-        title = html_to_text(re.sub(r"<h2[^>]*>|</h2>", "", title_html))
+        # Some Radancy sites put location and "View Job" inside the link too; the title is the <h2>
+        # when there is one, otherwise the text before the first <span>.
+        h2 = re.search(r"<h2[^>]*>(.*?)</h2>", title_html, re.S)
+        title = html_to_text(h2.group(1) if h2 else re.split(r"<span", title_html, maxsplit=1)[0])
         loc = re.search(r'class="[^"]*job-location[^"]*"[^>]*>(.*?)<', li, re.S)
         date = re.search(r'class="[^"]*date-posted[^"]*"[^>]*>(.*?)<', li, re.S)
         job = _job(f"radancy:{host}:{job_id}", title, company_name,

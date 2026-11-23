@@ -273,3 +273,20 @@ button.flag.save-co-btn:hover { background: #eaf1fd; }
 /* Search form while editing a saved search */
 .panel.editing { outline: 2px solid #2d6cdf; }
 .panel.editing h2 { color: #1f3a5f; }
+
+/* Add a job from its listing link */
+.add-job { margin-bottom: 12px; }
+.add-job .panel { margin-bottom: 0; }
+.add-job textarea { min-height: 120px; resize: vertical; }
+.add-job h3 { margin: 14px 0 8px; font-size: 15px; }
+.add-job .hint { font-size: 12px; color: #666; margin-bottom: 10px; }
+.small-link { display: inline-block; font-size: 12px; color: #2d6cdf; text-decoration: underline; cursor: pointer; margin: -4px 0 10px; }
+.reset-btn { white-space: nowrap; margin-left: auto; }
+.sort-companies .reset-btn { padding: 3px 10px; }
+/* Let the job filter row wrap on narrower windows instead of squeezing the text box */
+.filter-row { flex-wrap: wrap; }
+.filter-row #textFilter { flex: 1 1 240px; }
+/* Status tabs and "Hide not a fit" on one wrapping row, the checkbox right after the Not a fit tab */
+.status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.status-row #statusTabs { display: contents; }
+.status-row .hide-not-fit { margin: 0 0 0 4px; font-size: 13px; white-space: nowrap; }

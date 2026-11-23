@@ -714,6 +714,14 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     return [dict(r) for r in rows]
 
 
+def find_job_id(source_job_id):
+    """Row id for a job by its source id, following merged duplicates."""
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM jobs WHERE job_id = ?", (source_job_id,)).fetchone() \
+            or conn.execute("SELECT job_id AS id FROM job_aliases WHERE alias_job_id = ?", (source_job_id,)).fetchone()
+    return row["id"] if row else None
+
+
 def get_job(job_id):
     with connect() as conn:
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()

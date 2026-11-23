@@ -114,6 +114,8 @@
                         <option value="name">A–Z</option>
                         <option value="score">Benefits score</option>
                     </select>
+                    <button type="button" class="small secondary reset-btn" onclick="resetCompanyFilters()"
+                            title="Clear the company search and priority, sort by priority">Reset</button>
                 </label>
                 <form id="companyForm" class="company-form hidden" onsubmit="return false;">
                     <input type="hidden" id="cId">
@@ -159,10 +161,30 @@
         </aside>
 
         <main>
+            <div class="add-job">
+                <button class="small" id="addJobToggle" onclick="toggleAddJob()">+ Add a job from its listing link</button>
+                <div id="addJobPanel" class="panel hidden">
+                    <label>Link to the job on the company's careers page
+                        <input id="ajUrl" placeholder="https://… (paste the listing's web address)" onkeydown="if (event.key === 'Enter') previewJob(document.getElementById('ajReadBtn'))">
+                    </label>
+                    <a class="small-link" onclick="document.getElementById('ajTextWrap').classList.toggle('hidden')">Page won't load? Paste the listing text instead</a>
+                    <div id="ajTextWrap" class="hidden">
+                        <textarea id="ajText" placeholder="On the listing page press Ctrl+A, then Ctrl+C, and paste here (Ctrl+V)"></textarea>
+                    </div>
+                    <div class="buttons">
+                        <button id="ajReadBtn" onclick="previewJob(this)">Read listing</button>
+                        <button class="secondary" onclick="toggleAddJob(false)">Cancel</button>
+                    </div>
+                    <div id="ajPreview" class="hidden"></div>
+                </div>
+            </div>
             <div id="message" class="message hidden"></div>
 
             <div class="filters">
-                <div id="statusTabs" class="status-tabs"></div>
+                <div class="status-row">
+                    <div id="statusTabs"></div>
+                    <label class="check hide-not-fit"><input type="checkbox" id="hideNotFit" onchange="loadJobs()" checked> Hide not a fit</label>
+                </div>
                 <div class="filter-row">
                     <input id="textFilter" placeholder="Filter by title, company, description, notes" oninput="debouncedLoadJobs()">
                     <select id="workModeFilter" onchange="loadJobs()" title="Work style">
@@ -179,7 +201,6 @@
                         <option value="low">Low interest</option>
                         <option value="unset">Interest not set</option>
                     </select>
-                    <label class="check"><input type="checkbox" id="hideNotFit" onchange="loadJobs()" checked> Hide not a fit</label>
                     <select id="sortJobs" onchange="loadJobs()" title="Sort jobs">
                         <option value="found">Newest found</option>
                         <option value="posted">Newest posted</option>
@@ -189,6 +210,8 @@
                         <option value="company">Company</option>
                     </select>
                     <span id="searchFilterChip" class="chip hidden"></span>
+                    <button type="button" class="small secondary reset-btn" onclick="resetJobFilters()"
+                            title="Show all jobs: clear the text, work style, interest, status and company/search filters">Reset filters</button>
                 </div>
             </div>
 

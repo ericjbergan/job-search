@@ -10,7 +10,8 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import benefits, boards, db, geo, jsearch
+from jobsearch import benefits, boards, db, geo, importer, jsearch
+from jobsearch.pay import format_pay
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -284,6 +285,45 @@ def api_list_jobs():
     for j in jobs:
         j["saved_company_id"] = j.get("company_id") or saved.get(benefits.company_key(j.get("company") or ""))
     return jsonify(jobs)
+
+
+@app.route("/api/jobs/import/preview", methods=["POST"])
+def api_import_preview():
+    """Read one job from its listing link (or pasted text) so she can check it before saving."""
+    data = request.get_json() or {}
+    try:
+        job = importer.read_job(data.get("url"), text=data.get("text"), companies=db.list_companies())
+    except importer.ImportFailed as e:
+        return _error(str(e))
+    except Exception as e:  # network / ChatGPT trouble
+        return _error(f"Couldn't read that listing: {e}", 502)
+    v = db._job_values(job)
+    pay = (format_pay(v["salary_min"], v["salary_max"], v["salary_period"])
+           if v["salary_min"] or v["salary_max"] else v["salary_text"])
+    return jsonify({"job": job, "preview": {k: v[k] for k in (
+        "title", "company", "location", "work_mode", "employment_type", "req_number",
+        "posted_at", "closes_at", "publisher", "apply_link")} | {"salary_text": pay, "description_chars": len(v["description"] or "")}})
+
+
+@app.route("/api/jobs/import/save", methods=["POST"])
+def api_import_save():
+    """Save a previewed job, with any title/company/location corrections she made.
+    Jobs added by hand skip the title and distance filters: she chose this one."""
+    data = request.get_json() or {}
+    job = data.get("job") or {}
+    if not job.get("job_id"):
+        return _error("Nothing to save; read the listing first")
+    edits = data.get("edits") or {}
+    for field, key in (("title", "job_title"), ("company", "employer_name"), ("location", "job_location")):
+        if (edits.get(field) or "").strip():
+            job[key] = edits[field].strip()
+    company_id = job.pop("company_id", None)
+    if company_id is None and job.get("employer_name"):
+        key = benefits.company_key(job["employer_name"])
+        company_id = next((c["id"] for c in db.list_companies() if benefits.company_key(c["name"]) == key), None)
+    new, seen = db.save_results([job], company_id=company_id)
+    saved = db.find_job_id(job["job_id"])
+    return jsonify({"id": saved, "new": bool(new), "merged": bool(seen)}), 201
 
 
 @app.route("/api/jobs/<int:job_id>/save_company", methods=["POST"])

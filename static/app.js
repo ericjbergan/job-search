@@ -361,6 +361,28 @@ async function deleteSearch(searchId) {
     await refreshAll();
 }
 
+// Company list back to its defaults: no search text, all priorities, sorted by priority.
+// (Ticked companies are left alone; use "Select: none" to clear those.)
+function resetCompanyFilters() {
+    document.getElementById('companyFilter').value = '';
+    document.getElementById('priorityFilter').value = '';
+    setCompanySort('priority');
+}
+
+// Job list back to its defaults: All tab, no text/work style/interest filter, not-a-fit hidden,
+// newest found first, and no company or saved-search filter.
+function resetJobFilters() {
+    state.status = '';
+    state.searchId = null;
+    state.companyId = null;
+    document.getElementById('textFilter').value = '';
+    document.getElementById('workModeFilter').value = '';
+    document.getElementById('interestFilter').value = '';
+    document.getElementById('hideNotFit').checked = true;
+    document.getElementById('sortJobs').value = 'found';
+    refreshAll();
+}
+
 function filterBySearch(searchId) {
     state.searchId = state.searchId === searchId ? null : searchId;
     state.companyId = null;
@@ -844,6 +866,83 @@ async function saveJobCompany(event, jobId) {
             : `It will be checked directly on its ${state.atsLabels[company.ats] || company.ats} careers site (free).`;
         showMessage(`Added ${company.name} to your companies. ${how}`);
         await refreshAll();
+    } catch (e) {
+        showMessage(e.message, true);
+        button.disabled = false;
+    }
+}
+
+// --- add a job from its listing link ----------------------------------------------
+
+const addJobState = { job: null };
+
+function toggleAddJob(show) {
+    const panel = document.getElementById('addJobPanel');
+    const open = show === undefined ? panel.classList.contains('hidden') : show;
+    panel.classList.toggle('hidden', !open);
+    document.getElementById('addJobToggle').classList.toggle('hidden', open);
+    if (open) {
+        document.getElementById('ajUrl').focus();
+    } else {
+        ['ajUrl', 'ajText'].forEach(id => document.getElementById(id).value = '');
+        document.getElementById('ajTextWrap').classList.add('hidden');
+        document.getElementById('ajPreview').classList.add('hidden');
+        addJobState.job = null;
+    }
+}
+
+async function previewJob(button) {
+    const url = document.getElementById('ajUrl').value.trim();
+    const text = document.getElementById('ajText').value.trim();
+    if (!url && !text) return showMessage('Paste the link to the job listing.', true);
+    button.disabled = true;
+    button.textContent = 'Reading…';
+    try {
+        const r = await api('/api/jobs/import/preview', { method: 'POST', body: { url, text } });
+        addJobState.job = r.job;
+        const p = r.preview;
+        const facts = [
+            p.work_mode ? (WORK_MODE_LABELS[p.work_mode] || p.work_mode) : 'Work style not stated',
+            p.employment_type, p.salary_text, p.req_number ? `Req ${p.req_number}` : '',
+            p.posted_at ? `Posted ${shortDate(p.posted_at)}` : '', `${p.description_chars.toLocaleString()} characters of description`,
+        ].filter(Boolean).join(' · ');
+        const box = document.getElementById('ajPreview');
+        box.innerHTML = `
+            <h3>Check the details, then save</h3>
+            <label>Job title <input id="ajTitle" value="${esc(p.title || '')}"></label>
+            <div class="row">
+                <label>Company <input id="ajCompany" value="${esc(p.company || '')}"></label>
+                <label>Location <input id="ajLocation" value="${esc(p.location || '')}" placeholder="e.g. Columbus, OH"></label>
+            </div>
+            <div class="hint">${esc(facts)}${p.publisher ? ` · from ${esc(p.publisher)}` : ''}</div>
+            <div class="buttons"><button onclick="saveImportedJob(this)">Save job</button></div>`;
+        box.classList.remove('hidden');
+    } catch (e) {
+        showMessage(e.message, true);
+        if (/paste/i.test(e.message)) document.getElementById('ajTextWrap').classList.remove('hidden');
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Read listing';
+    }
+}
+
+async function saveImportedJob(button) {
+    if (!addJobState.job) return;
+    button.disabled = true;
+    try {
+        const r = await api('/api/jobs/import/save', { method: 'POST', body: { job: addJobState.job, edits: {
+            title: document.getElementById('ajTitle').value, company: document.getElementById('ajCompany').value,
+            location: document.getElementById('ajLocation').value } } });
+        toggleAddJob(false);
+        // Show it: clear filters that could hide it, then open the job.
+        state.status = ''; state.searchId = null; state.companyId = null;
+        document.getElementById('textFilter').value = '';
+        await refreshAll();
+        showMessage(r.merged ? 'That job was already saved; this listing was added to it.' : 'Job added.');
+        if (r.id && document.getElementById(`job-${r.id}`)) {
+            await openJob(r.id, true);
+            document.getElementById(`job-${r.id}`).scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
     } catch (e) {
         showMessage(e.message, true);
         button.disabled = false;

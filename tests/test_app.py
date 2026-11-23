@@ -800,3 +800,57 @@ class EditSavedSearchTests(FreshDbTest):
                          ("BSA remote", "business systems analyst", None, 1, "month", "FULLTIME", 2))
         self.assertEqual(self.client.patch(f"/api/searches/{sid}", json={"query": " "}).status_code, 400)
         self.assertEqual(self.client.patch("/api/searches/999", json={"query": "x"}).status_code, 404)
+
+
+class ImportJobTests(FreshDbTest):
+    PAGE = ('<html><script type="application/ld+json">' + json.dumps({
+        "@type": "JobPosting", "title": "Senior Business Analyst", "hiringOrganization": {"name": "Acme Health"},
+        "jobLocation": {"address": {"addressLocality": "Columbus", "addressRegion": "OH", "addressCountry": "US"}},
+        "description": "<p>Lead requirements work. 401(k) with 6% match. This is a hybrid role.</p>",
+        "datePosted": "2026-11-20", "identifier": {"value": "R-555"},
+        "baseSalary": {"value": {"minValue": 90000, "maxValue": 110000, "unitText": "YEAR"}}}) + '</script></html>')
+
+    def test_reads_structured_job_page(self):
+        from jobsearch import importer
+        with mock.patch.object(boards, "_request", return_value=mock.MagicMock(text=self.PAGE)):
+            job = importer.read_job("https://careers.acmehealth.example/job/555")
+        v = db._job_values(job)
+        self.assertEqual((v["title"], v["company"], v["location"], v["req_number"]),
+                         ("Senior Business Analyst", "Acme Health", "Columbus, OH, US", "R-555"))
+        self.assertEqual((v["salary_min"], v["salary_max"], v["work_mode"]), (90000, 110000, "hybrid"))
+        self.assertTrue(v["job_id"].startswith("url:careers.acmehealth.example/job/555"))
+
+    def test_big_job_boards_ask_for_pasted_text(self):
+        from jobsearch import importer
+        with self.assertRaises(importer.ImportFailed) as ctx:
+            importer.read_job("https://www.indeed.com/viewjob?jk=abc")
+        self.assertIn("paste", str(ctx.exception).lower())
+
+    def test_pasted_text_uses_chatgpt_fields_and_keeps_text(self):
+        from jobsearch import importer
+        text = "Business Analyst II\nBigCo\nDublin, OH (Hybrid)\n" + "Gather requirements. " * 30
+        answer = {"title": "Business Analyst II", "company": "BigCo", "location": "Dublin, OH", "work_style": "hybrid",
+                  "pay": "$80,000 - $95,000", "req_number": None, "posted_date": None, "closing_date": None, "employment_type": None}
+        fake = mock.MagicMock()
+        fake.chat.completions.create.return_value.choices = [mock.MagicMock(message=mock.MagicMock(content=json.dumps(answer)))]
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), mock.patch.object(importer.benefits, "_client", return_value=fake):
+            job = importer.read_job("https://www.glassdoor.com/job-listing/x", text=text)
+        v = db._job_values(job)
+        self.assertEqual((v["title"], v["company"], v["work_mode"], v["salary_min"]), ("Business Analyst II", "BigCo", "hybrid", 80000))
+        self.assertIn("Gather requirements", v["description"])
+        self.assertEqual(v["publisher"], "Glassdoor")
+
+    def test_preview_then_save_with_edits_links_saved_company(self):
+        cid = db.add_company({"name": "Acme Health", "ats": "search"})
+        with mock.patch.object(boards, "_request", return_value=mock.MagicMock(text=self.PAGE)):
+            r = self.client.post("/api/jobs/import/preview", json={"url": "https://careers.acmehealth.example/job/555"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        body = r.get_json()
+        self.assertEqual(body["preview"]["company"], "Acme Health")
+        saved = self.client.post("/api/jobs/import/save", json={"job": body["job"], "edits": {"title": "Sr. Business Analyst"}}).get_json()
+        job = db.get_job(saved["id"])
+        self.assertEqual((job["title"], job["company_id"], saved["new"]), ("Sr. Business Analyst", cid, True))
+        # Saving the same listing again merges instead of duplicating.
+        again = self.client.post("/api/jobs/import/save", json={"job": body["job"]}).get_json()
+        self.assertEqual(again["id"], saved["id"])
+        self.assertEqual(len(db.list_jobs()), 1)
