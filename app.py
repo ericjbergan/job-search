@@ -73,6 +73,18 @@ def api_add_search():
     return jsonify(db.get_search(search_id)), 201
 
 
+@app.route("/api/searches/<int:search_id>", methods=["PATCH"])
+def api_update_search(search_id):
+    if not db.get_search(search_id):
+        return _error("Saved search not found", 404)
+    data = request.get_json() or {}
+    if not (data.get("query") or "").strip():
+        return _error("Search text is required")
+    data["name"] = (data.get("name") or "").strip() or jsearch.build_query(data["query"], data.get("location"))
+    db.update_search(search_id, data)
+    return jsonify(db.get_search(search_id))
+
+
 @app.route("/api/searches/<int:search_id>", methods=["DELETE"])
 def api_delete_search(search_id):
     db.delete_search(search_id)
@@ -265,6 +277,7 @@ def api_list_jobs():
         hide_not_fit=request.args.get("hide_not_fit") == "1",
         sort=request.args.get("sort") or "found",
         work_mode=request.args.get("work_mode") or None,
+        interest=request.args.get("interest") or None,
     )
     # Flag jobs whose employer is already a saved company (by name, so job-board results count too).
     saved = {benefits.company_key(c["name"]): c["id"] for c in db.list_companies()}

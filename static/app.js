@@ -85,13 +85,29 @@ function salaryText(job) {
 
 const WORK_MODE_LABELS = { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' };
 
-// Work style after the location on the job card ("Columbus, OH · Hybrid"). A "?" means it was
+// Right side of the job card, under the posted date: the work style tag (Remote / Hybrid / On-site /
+// Unknown), then the job's location for anything that isn't remote. A "?" means the work style was
 // read from the description rather than a field on the listing.
-function workModeInline(job) {
-    if (!job.work_mode) return ' · <span class="work-mode none">work style not stated</span>';
-    const guessed = job.work_mode_source === 'description';
-    const tip = guessed ? 'Mentioned in the description; check the listing to confirm' : 'Listed on the posting';
-    return ` · <span class="work-mode ${esc(job.work_mode)}" title="${tip}">${esc(WORK_MODE_LABELS[job.work_mode] || job.work_mode)}${guessed ? '?' : ''}</span>`;
+function workModeBlock(job) {
+    const mode = job.work_mode || 'unknown';
+    const guessed = job.work_mode && job.work_mode_source === 'description';
+    const tip = !job.work_mode ? 'Not stated on the listing' : guessed ? 'Mentioned in the description; check the listing to confirm' : 'Listed on the posting';
+    const label = WORK_MODE_LABELS[mode] || 'Unknown';
+    return `<div class="work-mode ${esc(mode)}" title="${tip}">${esc(label)}${guessed ? '?' : ''}</div>` +
+        (mode === 'remote' ? '' : `<div class="job-location">${esc(job.location || 'Location not listed')}</div>`);
+}
+
+// Other sites listing the same job (merged into this card): "Also on ZipRecruiter ↗, Indeed ↗".
+function alsoFoundHtml(job) {
+    let sources = [];
+    try { sources = JSON.parse(job.also_found || '[]'); } catch (e) { /* ignore bad data */ }
+    if (!sources.length) return '';
+    const links = sources.map(s => {
+        const url = safeUrl(s.link);
+        const name = esc(s.publisher || 'another site');
+        return url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${name} ↗</a>` : name;
+    });
+    return `Also on ${links.join(', ')} · `;
 }
 
 function shortDate(iso) {
@@ -104,6 +120,22 @@ function closesText(iso) {
     if (days < 0) return `closed ${shortDate(iso)}`;
     if (days === 0) return 'closes today';
     return days <= 14 ? `closes in ${days} day${days === 1 ? '' : 's'}` : `closes ${shortDate(iso)}`;
+}
+
+const INTEREST_LABELS = { high: 'High', medium: 'Medium', low: 'Low' };
+
+// High / Medium / Low for a job marked Interested or Applied. Clicking the current level clears it.
+function interestChooser(job) {
+    return `<div class="interest-chooser" onclick="event.stopPropagation()">
+        <span>Interest:</span>
+        ${Object.entries(INTEREST_LABELS).map(([key, label]) => `<button class="interest-opt ${key} ${job.interest_level === key ? 'on' : ''}"
+            onclick="setInterest(event, ${job.id}, '${key}', '${esc(job.interest_level || '')}')">${label}</button>`).join('')}
+    </div>`;
+}
+
+async function setInterest(event, jobId, level, current) {
+    event.stopPropagation();
+    await updateJob(jobId, { interest_level: current === level ? null : level });
 }
 
 // One-click flags on the job card (Interested / Applied / Not a fit). Clicking the active one clears it back to "new".
@@ -177,6 +209,7 @@ async function loadSearches() {
                 ${s.job_count} job${s.job_count === 1 ? '' : 's'} · ${s.last_run_at ? 'last run ' + esc(relativeDate(s.last_run_at)) : 'never run'}</div>
             <div class="saved-actions">
                 <button class="small" onclick="event.stopPropagation(); runSearch(${s.id}, this)">Run</button>
+                <button class="small secondary" onclick="event.stopPropagation(); editSearch(${s.id})">Edit</button>
                 <button class="small danger" onclick="event.stopPropagation(); deleteSearch(${s.id})">Delete</button>
             </div>
         </li>`;
@@ -222,6 +255,64 @@ async function withBusy(button, fn) {
         buttons.forEach(b => b.disabled = false);
         if (button) button.textContent = original;
         updateCheckSelectedButton();  // stays disabled when nothing is ticked
+    }
+}
+
+// Editing a saved search reuses the search form: fill it in and swap the buttons.
+function editSearch(searchId) {
+    const s = state.searches.find(x => x.id === searchId);
+    if (!s) return;
+    document.getElementById('fEditId').value = s.id;
+    document.getElementById('fQuery').value = s.query || '';
+    document.getElementById('fLocation').value = s.location || '';
+    document.getElementById('fRemote').checked = !!s.remote_only;
+    document.getElementById('fDatePosted').value = s.date_posted || 'all';
+    document.getElementById('fType').value = s.employment_types || '';
+    document.getElementById('fPages').value = String(s.num_pages || 1);
+    document.getElementById('fName').value = s.name || '';
+    setSearchFormMode(true, s.name);
+    const form = document.getElementById('searchForm').closest('.panel');
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('fQuery').focus();
+}
+
+function setSearchFormMode(editing, name = '') {
+    document.getElementById('searchFormTitle').textContent = editing ? `Edit saved search: ${name}` : 'New JSearch';
+    document.getElementById('fNameLabel').textContent = editing ? 'Name' : 'Save as (optional)';
+    document.getElementById('newSearchButtons').classList.toggle('hidden', editing);
+    document.getElementById('editSearchButtons').classList.toggle('hidden', !editing);
+    document.getElementById('searchForm').closest('.panel').classList.toggle('editing', editing);
+}
+
+function cancelSearchEdit() {
+    document.getElementById('fEditId').value = '';
+    document.getElementById('searchForm').reset();
+    setSearchFormMode(false);
+}
+
+async function saveSearchEdits(button, runAfter) {
+    const id = document.getElementById('fEditId').value;
+    const params = formParams();
+    if (!params.query) return showMessage('Enter something to search for.', true);
+    if (runAfter) {
+        await withBusy(button, async () => {
+            await api(`/api/searches/${id}`, { method: 'PATCH', body: params });
+            const result = await api(`/api/searches/${id}/run`, { method: 'POST' });
+            cancelSearchEdit();
+            state.searchId = +id;
+            state.companyId = null;
+            reportRun(result);
+            await refreshAll();
+        });
+        return;
+    }
+    try {
+        const s = await api(`/api/searches/${id}`, { method: 'PATCH', body: params });
+        cancelSearchEdit();
+        showMessage(`Saved changes to "${s.name}". Click Run to search with them.`);
+        await loadSearches();
+    } catch (e) {
+        showMessage(e.message, true);
     }
 }
 
@@ -591,6 +682,8 @@ async function loadJobs() {
     if (text) params.append('q', text);
     const workMode = document.getElementById('workModeFilter').value;
     if (workMode) params.append('work_mode', workMode);
+    const interest = document.getElementById('interestFilter').value;
+    if (interest) params.append('interest', interest);
     if (document.getElementById('hideNotFit').checked) params.append('hide_not_fit', '1');
     params.append('sort', document.getElementById('sortJobs').value);
 
@@ -628,21 +721,23 @@ function renderJobSummary(job) {
         <div class="job-summary" onclick="toggleJob(${job.id})">
             <div>
                 <div class="job-title">${esc(job.title)}</div>
-                <div class="job-sub">${esc(job.company || 'Unknown company')} · ${esc(job.location || 'Location not listed')}${workModeInline(job)}</div>
+                <div class="job-sub">${esc(job.company || 'Unknown company')}</div>
                 ${job.employment_type ? `<span class="badge">${esc(job.employment_type)}</span> ` : ''}
                 ${job.req_number ? `<span class="badge req" title="Requisition / posting number">Req ${esc(job.req_number)}</span> ` : ''}
-                <span class="badge status-badge ${esc(job.status)}">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}</span>
+                <span class="badge status-badge ${esc(job.status)}">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}${job.interest_level && (interested || applied) ? ' · ' + esc(INTEREST_LABELS[job.interest_level]) : ''}</span>
                 <div class="flag-buttons">
                     <button class="flag ${interested ? 'on interested' : ''}" onclick="toggleFlag(event, ${job.id}, 'interested', '${esc(job.status)}')">★ Interested</button>
                     <button class="flag ${applied ? 'on applied' : ''}" onclick="toggleFlag(event, ${job.id}, 'applied', '${esc(job.status)}')">✓ Applied</button>
                     <button class="flag ${notFit ? 'on not-fit' : ''}" onclick="toggleFlag(event, ${job.id}, 'not_a_fit', '${esc(job.status)}')">✕ Not a fit</button>
                     ${job.company && !job.saved_company_id ? `<button class="flag save-co-btn" title="Add ${esc(job.company)} to your saved companies" onclick="saveJobCompany(event, ${job.id})">+ Save company</button>` : ''}
                 </div>
+                ${interested || applied ? interestChooser(job) : ''}
             </div>
             <div class="job-side">
                 ${salary ? `<div class="salary" title="${esc(job.salary_text || '')}">${esc(salary)}</div>` : '<div class="no-pay">pay not listed</div>'}
                 <div>${job.posted_at ? 'posted ' + esc(shortDate(job.posted_at)) : ''}</div>
                 ${closes ? `<div class="${closes.startsWith('closed') ? 'closed' : 'closes'}">${esc(closes)}</div>` : ''}
+                ${workModeBlock(job)}
             </div>
         </div>
         <div class="job-detail hidden" id="detail-${job.id}"></div>
@@ -691,6 +786,7 @@ async function openJob(jobId, closeOthers) {
             ${job.applied_at ? `Applied ${esc(shortDate(job.applied_at))} · ` : ''}
             ${job.salary_text ? `Pay as posted: “${esc(job.salary_text)}” · ` : ''}
             ${job.publisher ? `Found via ${esc(job.publisher)} · ` : ''}
+            ${alsoFoundHtml(job)}
             First saved ${esc(relativeDate(job.first_seen_at))} · last seen in results ${esc(relativeDate(job.last_seen_at))}
         </div>
     `;
@@ -699,7 +795,7 @@ async function openJob(jobId, closeOthers) {
 async function updateJob(jobId, fields) {
     try {
         await api(`/api/jobs/${jobId}`, { method: 'PATCH', body: fields });
-        if ('status' in fields) {
+        if ('status' in fields || 'interest_level' in fields) {
             await loadMeta();
             await loadJobs();
         } else {

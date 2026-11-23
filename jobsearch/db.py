@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from jobsearch import benefits as benefits_mod, pay, workmode
+from jobsearch import benefits as benefits_mod, boards, geo, pay, workmode
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB_PATH = os.path.join(REPO_DIR, "jobs.db")
@@ -101,12 +101,21 @@ CREATE TABLE IF NOT EXISTS jobs (
     description     TEXT,
     status          TEXT NOT NULL DEFAULT 'new',
     applied_at      TEXT,
+    interest_level  TEXT,
+    also_found      TEXT,
     notes           TEXT,
     first_seen_at   TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,
     raw_json        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+-- Other listings of a job already saved (same job posted on Ladders and ZipRecruiter):
+-- their ids point at the one job card so they aren't saved again.
+CREATE TABLE IF NOT EXISTS job_aliases (
+    alias_job_id    TEXT PRIMARY KEY,
+    job_id          INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE
+);
 
 -- Which saved search found which job (a job can match several searches).
 CREATE TABLE IF NOT EXISTS search_jobs (
@@ -126,7 +135,9 @@ CREATE TABLE IF NOT EXISTS api_calls (
 """
 
 # Columns the UI may change on a job; everything else comes from JSearch.
-EDITABLE_JOB_FIELDS = ("status", "notes")
+EDITABLE_JOB_FIELDS = ("status", "notes", "interest_level")
+# How much she wants a job she's marked Interested or Applied.
+INTEREST_LEVELS = ("high", "medium", "low")
 
 
 def db_path():
@@ -164,7 +175,8 @@ def _migrate(conn):
     added = {
         "companies": (("priority", "INTEGER"), ("rating", "REAL")),
         "jobs": (("req_number", "TEXT"), ("closes_at", "TEXT"), ("applied_at", "TEXT"),
-                 ("work_mode", "TEXT"), ("work_mode_source", "TEXT")),
+                 ("work_mode", "TEXT"), ("work_mode_source", "TEXT"), ("also_found", "TEXT"),
+                 ("interest_level", "TEXT")),
     }
     for table, columns in added.items():
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -327,6 +339,20 @@ def add_search(params):
             params.get("employment_types"), int(params.get("num_pages") or 1), now_iso(),
         ))
         return cur.lastrowid
+
+
+def update_search(search_id, params):
+    """Change a saved search's criteria; jobs it already found stay linked to it."""
+    with connect() as conn:
+        conn.execute("""
+            UPDATE searches SET name = ?, query = ?, location = ?, remote_only = ?, date_posted = ?,
+                                employment_types = ?, num_pages = ?
+            WHERE id = ?
+        """, (
+            params["name"], params["query"], params.get("location") or None,
+            int(bool(params.get("remote_only"))), params.get("date_posted") or "all",
+            params.get("employment_types") or None, int(params.get("num_pages") or 1), search_id,
+        ))
 
 
 def delete_search(search_id):
@@ -512,15 +538,63 @@ def _job_values(job):
     }
 
 
+def _same_place(a, b):
+    """Two location strings name the same place (or neither says where)."""
+    na, nb = boards.norm(a), boards.norm(b)
+    if na == nb:
+        return True
+    pa, pb = geo.parse_points(a), geo.parse_points(b)
+    if pa and pb:
+        return any(geo.miles(x, y) < 2 for x in pa for y in pb)
+    return False
+
+
+def _dedupe_index(conn):
+    """(company, title) -> saved jobs, for spotting the same job listed on another site."""
+    index = {}
+    for r in conn.execute("SELECT id, company, title, location, req_number FROM jobs").fetchall():
+        key = (benefits_mod.company_key(r["company"] or ""), boards.norm(r["title"]))
+        index.setdefault(key, []).append(dict(r))
+    return index
+
+
+def _find_duplicate(index, v):
+    """A saved job with the same company, title and location whose req number (if both have one) agrees."""
+    key = (benefits_mod.company_key(v["company"] or ""), boards.norm(v["title"]))
+    for r in index.get(key, []):
+        if r["req_number"] and v["req_number"] and boards.norm(r["req_number"]) != boards.norm(v["req_number"]):
+            continue  # same title, different opening
+        if _same_place(r["location"], v["location"]):
+            return r["id"]
+    return None
+
+
+def _add_source(conn, row_id, publisher, link):
+    """Remember another site the job is listed on ("Also on ZipRecruiter")."""
+    row = conn.execute("SELECT publisher, apply_link, also_found FROM jobs WHERE id = ?", (row_id,)).fetchone()
+    if not row or (link and link == row["apply_link"]):
+        return
+    sources = json.loads(row["also_found"] or "[]")
+    if any(s.get("link") == link and s.get("publisher") == publisher for s in sources):
+        return
+    if publisher == row["publisher"] and not link:
+        return
+    sources.append({"publisher": publisher, "link": link})
+    conn.execute("UPDATE jobs SET also_found = ? WHERE id = ?", (json.dumps(sources), row_id))
+
+
 def save_results(results, search_id=None, company_id=None):
     """Insert new jobs and refresh existing ones. Returns (new_count, seen_count).
 
     Status and notes on existing jobs are never touched, so re-running a
-    search can't undo your tracking.
+    search can't undo your tracking. A job already saved from another site
+    (same company, title and location) is merged into that card instead of
+    becoming a second one.
     """
     new_count = seen_count = 0
     ts = now_iso()
     with connect() as conn:
+        index = _dedupe_index(conn)
         for job in results:
             if not job.get("job_id"):
                 continue
@@ -528,6 +602,21 @@ def save_results(results, search_id=None, company_id=None):
             if company_id is not None:
                 v["company_id"] = company_id
             existing = conn.execute("SELECT id FROM jobs WHERE job_id = ?", (v["job_id"],)).fetchone()
+            if not existing:
+                alias = conn.execute("SELECT job_id FROM job_aliases WHERE alias_job_id = ?", (v["job_id"],)).fetchone()
+                dup_id = alias["job_id"] if alias else _find_duplicate(index, v)
+                if dup_id:
+                    # Same job from another site: keep one card, note where else it's listed.
+                    conn.execute("INSERT OR IGNORE INTO job_aliases (alias_job_id, job_id) VALUES (?, ?)", (v["job_id"], dup_id))
+                    _add_source(conn, dup_id, v["publisher"], v["apply_link"])
+                    conn.execute("UPDATE jobs SET last_seen_at = ? WHERE id = ?", (ts, dup_id))
+                    if company_id is not None:
+                        conn.execute("UPDATE jobs SET company_id = COALESCE(company_id, ?) WHERE id = ?", (company_id, dup_id))
+                    if search_id is not None:
+                        conn.execute("INSERT OR IGNORE INTO search_jobs (search_id, job_id, first_seen_at) VALUES (?, ?, ?)",
+                                     (search_id, dup_id, ts))
+                    seen_count += 1
+                    continue
             if existing:
                 row_id = existing["id"]
                 conn.execute("""
@@ -553,6 +642,8 @@ def save_results(results, search_id=None, company_id=None):
                 )
                 row_id = cur.lastrowid
                 new_count += 1
+                key = (benefits_mod.company_key(v["company"] or ""), boards.norm(v["title"]))
+                index.setdefault(key, []).append({"id": row_id, "location": v["location"], "req_number": v["req_number"]})
             if search_id is not None:
                 conn.execute(
                     "INSERT OR IGNORE INTO search_jobs (search_id, job_id, first_seen_at) VALUES (?, ?, ?)",
@@ -573,15 +664,17 @@ JOB_SORTS = {
            "COALESCE(j.salary_max, j.salary_min) * CASE j.salary_period WHEN 'HOUR' THEN 2080 "
            "WHEN 'MONTH' THEN 12 ELSE 1 END DESC",
     "closes": "j.closes_at IS NULL, j.closes_at ASC",
+    "interest": "CASE j.interest_level WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, "
+                "j.first_seen_at DESC",
     "company": "j.company COLLATE NOCASE, j.title COLLATE NOCASE",
 }
 
 
 def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_only=False,
-              hide_not_fit=False, sort="found", work_mode=None):
+              hide_not_fit=False, sort="found", work_mode=None, interest=None):
     sql = ["SELECT j.id, j.company_id, j.title, j.company, j.location, j.is_remote, j.employment_type,",
            "j.posted_at, j.salary_min, j.salary_max, j.salary_period, j.salary_text,",
-           "j.req_number, j.closes_at, j.applied_at, j.work_mode, j.work_mode_source,",
+           "j.req_number, j.closes_at, j.applied_at, j.work_mode, j.work_mode_source, j.interest_level,",
            "j.apply_link, j.publisher, j.status, j.notes, j.first_seen_at, j.last_seen_at",
            "FROM jobs j"]
     where, args = [], []
@@ -602,6 +695,11 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     elif work_mode in workmode.MODES:
         where.append("j.work_mode = ?")
         args.append(work_mode)
+    if interest == "unset":
+        where.append("j.interest_level IS NULL")
+    elif interest in INTEREST_LEVELS:
+        where.append("j.interest_level = ?")
+        args.append(interest)
     if hide_not_fit and status != "not_a_fit":
         where.append("j.status != 'not_a_fit'")
     if text:
@@ -630,6 +728,13 @@ def update_job(job_id, fields):
     updates = {k: fields[k] for k in EDITABLE_JOB_FIELDS if k in fields}
     if "status" in updates and updates["status"] not in STATUSES:
         raise ValueError(f"Unknown status: {updates['status']}")
+    if "interest_level" in updates:
+        updates["interest_level"] = (updates["interest_level"] or "").lower() or None
+        if updates["interest_level"] not in (None, *INTEREST_LEVELS):
+            raise ValueError(f"Unknown interest level: {updates['interest_level']}")
+    # Going back to New or Not a fit drops the interest level; Interested <-> Applied keeps it.
+    if updates.get("status") in ("new", "not_a_fit") and "interest_level" not in updates:
+        updates["interest_level"] = None
     if not updates:
         return
     with connect() as conn:

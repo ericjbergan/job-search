@@ -202,9 +202,9 @@ button.flag.on.not-fit { background: #A6A6A6; border-color: #A6A6A6; color: #fff
 .filter-row select { width: auto; margin: 0; }
 .work-mode { display: inline-block; margin-top: 3px; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
 .work-mode.remote { background: #d1ecf1; color: #0c5460; }
-.work-mode.hybrid { background: #e8e1f5; color: #4b2c83; }
-.work-mode.onsite { background: #fde2cf; color: #8a4510; }
-.work-mode.none { color: #aaa; font-weight: normal; padding: 0; }
+.work-mode.hybrid { background: #FFFB9A; color: #5c5600; }
+.work-mode.onsite { background: #FFCAE0; color: #7a1f4a; }
+.work-mode.unknown { background: #C0C0C0; color: #333; }
 button.flag.on.interested { background: #f0ad4e; border-color: #f0ad4e; color: #fff; }
 
 /* --- benefits ------------------------------------------------------------- */
@@ -254,10 +254,22 @@ button.flag.save-co-btn:hover { background: #eaf1fd; }
 .badge.status-badge.interested { background: #f0ad4e; color: #fff; }
 .badge.status-badge.applied { background: #0072C8; color: #fff; }
 .badge.status-badge.not_a_fit { background: #A6A6A6; color: #fff; }
-.job-sub .work-mode { margin: 0; padding: 0 7px; vertical-align: 1px; }
-.job-sub .work-mode.none { font-size: 12px; padding: 0; }
+.job-side .work-mode { margin-top: 5px; }
+.job-location { font-size: 12px; color: #555; margin-top: 2px; max-width: 220px; white-space: normal; }
 .score-line.unrated { color: #999; }
 .company-filter { margin: 0 0 8px; padding: 6px 8px; font-size: 13px; }
 .company-filter-row { display: flex; gap: 6px; margin: 0 0 8px; }
 .company-filter-row .company-filter { margin: 0; flex: 1; min-width: 0; }
 .company-filter-row select { width: auto; margin: 0; padding: 5px 6px; font-size: 13px; }
+
+/* Interest level chooser (Interested / Applied jobs) */
+.interest-chooser { display: flex; align-items: center; gap: 5px; margin-top: 6px; font-size: 12px; color: #555; }
+.interest-opt { padding: 2px 10px; font-size: 12px; background: #fff; color: #555; border: 1px solid #ccd; border-radius: 12px; }
+.interest-opt:hover { background: #f4f4f4; filter: none; }
+.interest-opt.high.on { background: #c0392b; border-color: #c0392b; color: #fff; }
+.interest-opt.medium.on { background: #e67e22; border-color: #e67e22; color: #fff; }
+.interest-opt.low.on { background: #7f8c8d; border-color: #7f8c8d; color: #fff; }
+
+/* Search form while editing a saved search */
+.panel.editing { outline: 2px solid #2d6cdf; }
+.panel.editing h2 { color: #1f3a5f; }

@@ -18,7 +18,8 @@
     <div class="layout">
         <aside>
             <section class="panel">
-                <h2>New JSearch</h2>
+                <h2 id="searchFormTitle">New JSearch</h2>
+                <input type="hidden" id="fEditId">
                 <form id="searchForm" onsubmit="return false;">
                     <label>Search for
                         <input id="fQuery" placeholder="e.g. business analyst" required>
@@ -54,12 +55,17 @@
                             </select>
                         </label>
                     </div>
-                    <label>Save as (optional)
+                    <label><span id="fNameLabel">Save as (optional)</span>
                         <input id="fName" placeholder="name for this saved search">
                     </label>
-                    <div class="buttons">
+                    <div class="buttons" id="newSearchButtons">
                         <button type="button" onclick="saveAndRun(this)">Save &amp; run</button>
                         <button type="button" class="secondary" onclick="quickSearch(this)">Search once</button>
+                    </div>
+                    <div class="buttons hidden" id="editSearchButtons">
+                        <button type="button" onclick="saveSearchEdits(this, false)">Save changes</button>
+                        <button type="button" class="secondary" onclick="saveSearchEdits(this, true)">Save &amp; run</button>
+                        <button type="button" class="secondary" onclick="cancelSearchEdit()">Cancel</button>
                     </div>
                 </form>
             </section>
@@ -166,12 +172,20 @@
                         <option value="onsite">On-site</option>
                         <option value="unknown">Not stated</option>
                     </select>
+                    <select id="interestFilter" onchange="loadJobs()" title="Interest level">
+                        <option value="">Any interest</option>
+                        <option value="high">High interest</option>
+                        <option value="medium">Medium interest</option>
+                        <option value="low">Low interest</option>
+                        <option value="unset">Interest not set</option>
+                    </select>
                     <label class="check"><input type="checkbox" id="hideNotFit" onchange="loadJobs()" checked> Hide not a fit</label>
                     <select id="sortJobs" onchange="loadJobs()" title="Sort jobs">
                         <option value="found">Newest found</option>
                         <option value="posted">Newest posted</option>
                         <option value="pay">Highest pay</option>
                         <option value="closes">Closing soonest</option>
+                        <option value="interest">Interest (high first)</option>
                         <option value="company">Company</option>
                     </select>
                     <span id="searchFilterChip" class="chip hidden"></span>

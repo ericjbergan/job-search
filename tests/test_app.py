@@ -284,9 +284,9 @@ class PayAndFlagTests(FreshDbTest):
     def test_sort_by_pay_mixes_hourly_and_yearly(self):
         base = {"employer_name": "Acme", "job_title": "Business Analyst"}
         db.save_results([
-            {**base, "job_id": "1", "job_min_salary": 60000, "job_max_salary": 70000, "job_salary_period": "YEAR"},
-            {**base, "job_id": "2", "job_min_salary": 50, "job_max_salary": 60, "job_salary_period": "HOUR"},  # ~$125k
-            {**base, "job_id": "3"},
+            {**base, "job_id": "1", "job_title": "BA 1", "job_min_salary": 60000, "job_max_salary": 70000, "job_salary_period": "YEAR"},
+            {**base, "job_id": "2", "job_title": "BA 2", "job_min_salary": 50, "job_max_salary": 60, "job_salary_period": "HOUR"},  # ~$125k
+            {**base, "job_id": "3", "job_title": "BA 3"},
         ])
         order = [j["salary_max"] for j in self.client.get("/api/jobs?sort=pay").get_json()]
         self.assertEqual(order, [60, 70000, None])
@@ -337,10 +337,10 @@ class WorkModeTests(FreshDbTest):
     def test_saved_and_filterable(self):
         base = {"employer_name": "Acme", "job_title": "Business Analyst"}
         db.save_results([
-            {**base, "job_id": "1", "job_work_mode": "Hybrid"},
-            {**base, "job_id": "2", "job_location": "Ohio Remote"},
-            {**base, "job_id": "3", "job_description": "This role is onsite in Columbus. Must work onsite daily."},
-            {**base, "job_id": "4"},
+            {**base, "job_id": "1", "job_title": "BA 1", "job_work_mode": "Hybrid"},
+            {**base, "job_id": "2", "job_title": "BA 2", "job_location": "Ohio Remote"},
+            {**base, "job_id": "3", "job_title": "BA 3", "job_description": "This role is onsite in Columbus. Must work onsite daily."},
+            {**base, "job_id": "4", "job_title": "BA 4"},
         ])
         got = {j["work_mode"] for j in self.client.get("/api/jobs").get_json()}
         self.assertEqual(got, {"hybrid", "remote", "onsite", None})
@@ -576,14 +576,14 @@ class BonusQuoteTests(unittest.TestCase):
 
 
 class SaveCompanyFromJobTests(FreshDbTest):
-    def add_job(self, job_id, company, link):
-        db.save_results([{"job_id": job_id, "job_title": "Business Analyst", "employer_name": company,
+    def add_job(self, job_id, company, link, title="Business Analyst"):
+        db.save_results([{"job_id": job_id, "job_title": title, "employer_name": company,
                           "job_apply_link": link, "job_publisher": "LinkedIn"}])
         return next(j["id"] for j in db.list_jobs() if j["company"] == company)
 
     def test_save_from_job_board_listing(self):
         jid = self.add_job("a", "Startup Corp", "https://www.linkedin.com/jobs/view/123")
-        self.add_job("b", "Startup Corp.", "https://www.linkedin.com/jobs/view/456")  # same employer, other spelling
+        self.add_job("b", "Startup Corp.", "https://www.linkedin.com/jobs/view/456", "Product Owner")  # same employer, other spelling
         self.assertIsNone(self.client.get("/api/jobs").get_json()[0]["saved_company_id"])
 
         r = self.client.post(f"/api/jobs/{jid}/save_company")
@@ -721,3 +721,82 @@ class DetailPageTests(unittest.TestCase):
         self.assertIn("401(k) with 6% match", job["job_description"])
         self.assertIn("End", job["job_description"])
         self.assertNotIn("no", job["job_description"].split())
+
+
+class DuplicateJobTests(FreshDbTest):
+    def job(self, job_id, publisher, link, title="Business Analyst", location="Columbus, OH", req=None, company="Acme Corp"):
+        return {"job_id": job_id, "job_title": title, "employer_name": company, "job_location": location,
+                "job_publisher": publisher, "job_apply_link": link, "job_req_id": req}
+
+    def test_same_job_on_two_sites_is_one_card(self):
+        new, seen = db.save_results([self.job("lad1", "Ladders", "https://ladders.example/1"),
+                                     self.job("zip1", "ZipRecruiter", "https://zip.example/1", location="Columbus, Ohio",
+                                              company="Acme Corp.")])
+        self.assertEqual((new, seen), (1, 1))
+        jobs = db.list_jobs()
+        self.assertEqual(len(jobs), 1)
+        full = db.get_job(jobs[0]["id"])
+        self.assertEqual(json.loads(full["also_found"]), [{"publisher": "ZipRecruiter", "link": "https://zip.example/1"}])
+        # Running the search again doesn't bring the second listing back, or add it twice.
+        self.assertEqual(db.save_results([self.job("zip1", "ZipRecruiter", "https://zip.example/1")]), (0, 1))
+        self.assertEqual(len(json.loads(db.get_job(jobs[0]["id"])["also_found"])), 1)
+
+    def test_different_openings_stay_separate(self):
+        db.save_results([self.job("e1", "ADP", "l1", location=None, req="5396"),
+                         self.job("e2", "ADP", "l2", location=None, req="5391"),   # different req: another opening
+                         self.job("e3", "ADP", "l3", location="Austin, TX"),        # different place
+                         self.job("e4", "ADP", "l4", title="Business Analyst II")]) # different title
+        self.assertEqual(len(db.list_jobs()), 4)
+
+    def test_status_kept_and_search_linked_on_merge(self):
+        db.save_results([self.job("a", "LinkedIn", "https://li.example/a")])
+        jid = db.list_jobs()[0]["id"]
+        db.update_job(jid, {"status": "applied"})
+        sid = db.add_search({"name": "s", "query": "business analyst"})
+        db.save_results([self.job("b", "Indeed", "https://in.example/b")], search_id=sid)
+        self.assertEqual(db.get_job(jid)["status"], "applied")
+        self.assertEqual([j["id"] for j in db.list_jobs(search_id=sid)], [jid])
+
+
+class InterestLevelTests(FreshDbTest):
+    def setUp(self):
+        super().setUp()
+        db.save_results([{"job_id": f"j{i}", "job_title": f"BA {i}", "employer_name": "Acme"} for i in range(4)])
+        self.ids = sorted(j["id"] for j in db.list_jobs())
+
+    def patch(self, jid, **body):
+        return self.client.patch(f"/api/jobs/{jid}", json=body)
+
+    def test_set_keep_and_clear(self):
+        a = self.ids[0]
+        self.patch(a, status="interested")
+        self.assertEqual(self.patch(a, interest_level="high").get_json()["interest_level"], "high")
+        self.patch(a, status="applied")                       # Interested -> Applied keeps the level
+        self.assertEqual(db.get_job(a)["interest_level"], "high")
+        self.assertEqual(self.patch(a, interest_level="Low").get_json()["interest_level"], "low")  # change on Applied
+        self.patch(a, status="new")                           # back to New clears it
+        self.assertIsNone(db.get_job(a)["interest_level"])
+        self.assertEqual(self.patch(a, interest_level="urgent").status_code, 400)
+
+    def test_filter_and_sort(self):
+        levels = ["low", "high", None, "medium"]
+        for jid, level in zip(self.ids, levels):
+            self.patch(jid, status="interested", interest_level=level)
+        got = lambda q: [j["interest_level"] for j in self.client.get(f"/api/jobs?{q}").get_json()]
+        self.assertEqual(got("status=interested&sort=interest"), ["high", "medium", "low", None])
+        self.assertEqual(got("status=interested&interest=high"), ["high"])
+        self.assertEqual(got("status=interested&interest=unset"), [None])
+
+
+class EditSavedSearchTests(FreshDbTest):
+    def test_edit_saved_search(self):
+        sid = self.client.post("/api/searches", json={"query": "business analyst", "location": "Columbus, OH",
+                                                     "date_posted": "week", "name": "BA Columbus"}).get_json()["id"]
+        r = self.client.patch(f"/api/searches/{sid}", json={"query": "business systems analyst", "location": "",
+                                                           "remote_only": True, "date_posted": "month",
+                                                           "employment_types": "FULLTIME", "num_pages": 2, "name": "BSA remote"})
+        s = r.get_json()
+        self.assertEqual((s["name"], s["query"], s["location"], s["remote_only"], s["date_posted"], s["employment_types"], s["num_pages"]),
+                         ("BSA remote", "business systems analyst", None, 1, "month", "FULLTIME", 2))
+        self.assertEqual(self.client.patch(f"/api/searches/{sid}", json={"query": " "}).status_code, 400)
+        self.assertEqual(self.client.patch("/api/searches/999", json={"query": "x"}).status_code, 404)
