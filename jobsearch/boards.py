@@ -830,6 +830,27 @@ def _slug(text):
     return "-".join(norm(text).split())
 
 
+def _element_html(page, attr_pattern):
+    """Inner HTML of the first element whose class or id matches, following nested tags of the same kind."""
+    m = re.search(r'<(div|section|article)\b[^>]*\b(?:class|id)="' + attr_pattern + r'"[^>]*>', page, re.I)
+    if not m:
+        return None
+    tag, depth, pos = m.group(1).lower(), 1, m.end()
+    for t in re.finditer(r"<(/?)" + tag + r"\b[^>]*>", page[pos:], re.I):
+        depth += -1 if t.group(1) else 1
+        if depth == 0:
+            return page[pos:pos + t.start()]
+    return page[pos:]
+
+
+def talentegy_details(job, url):
+    """Talentegy job pages have no structured data; the text is in the element named "Description"."""
+    page = _request("GET", url, headers={"Accept": "text/html"}).text
+    inner = _element_html(page, r"(?:[^\"]*\s)?Description(?:\s[^\"]*)?")
+    if inner:
+        job["job_description"] = html_to_text(re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", inner))
+
+
 def fetch_talentegy(token, company_name, query, locations=None):
     host = token
     jobs, start = [], 0
@@ -840,12 +861,14 @@ def fetch_talentegy(token, company_name, query, locations=None):
         batch = data.get("Records") or []
         for r in batch:
             text = {k: html_to_text(v) if isinstance(v, str) else v for k, v in r.items()}
-            jobs.append(_job(f"talentegy:{host}:{r['ID']}", text.get("Title"), company_name,
-                             text.get("CityStateDataAbbrev") or text.get("CityStateData") or text.get("LocationName"),
-                             remote=r.get("IsRemote"), posted=r.get("PostedDateRaw"), closes=r.get("ExpirationDate"),
-                             link=f"https://{host}/search/jobdetails/{_slug(text.get('Title'))}/{r['ID']}",
-                             publisher="Talentegy", employment_type=text.get("TypeName"),
-                             req=text.get("ReferenceNumber")))
+            link = f"https://{host}/search/jobdetails/{_slug(text.get('Title'))}/{r['ID']}"
+            job = _job(f"talentegy:{host}:{r['ID']}", text.get("Title"), company_name,
+                       text.get("CityStateDataAbbrev") or text.get("CityStateData") or text.get("LocationName"),
+                       remote=r.get("IsRemote"), posted=r.get("PostedDateRaw"), closes=r.get("ExpirationDate"),
+                       link=link, publisher="Talentegy", employment_type=text.get("TypeName"),
+                       req=text.get("ReferenceNumber"))
+            job["_enrich"] = (talentegy_details, (link,))
+            jobs.append(job)
         start += len(batch)
         if not batch or start >= (data.get("TotalRecordCount") or 0):
             break
@@ -869,8 +892,10 @@ def fetch_avature(token, company_name, query, locations=None):
             link, title = a.group(1), html_to_text(a.group(2))
             spans = [html_to_text(s) for s in re.findall(r"<span[^>]*>(.*?)</span>", sub, re.S)]
             job_id = link.rstrip("/").rsplit("/", 1)[-1]
-            jobs.append(_job(f"avature:{token.split('/')[0]}:{job_id}", title, company_name,
-                             spans[-1] if spans else None, link=link, publisher="Avature", req=job_id))
+            job = _job(f"avature:{token.split('/')[0]}:{job_id}", title, company_name,
+                       spans[-1] if spans else None, link=link, publisher="Avature", req=job_id)
+            job["_enrich"] = (jsonld_details, (link,))  # description and dates are on the job page
+            jobs.append(job)
         before = len(seen)
         seen.update(j["job_id"] for j in jobs)
         if not blocks or len(seen) == before:
@@ -893,14 +918,31 @@ def fetch_adp_myjobs(token, company_name, query=None, locations=None):
         for j in batch:
             locs = [l.get("nameCode", {}).get("shortName") or l.get("address", {}).get("cityName")
                     for l in (j.get("requisitionLocations") or j.get("postingLocations") or [])]
-            jobs.append(_job(f"adp_myjobs:{token}:{j.get('reqId')}", j.get("jobTitle"), company_name,
-                             "; ".join(filter(None, locs)) or None, posted=j.get("postingDate") or j.get("postDate"),
-                             link=f"https://myjobs.adp.com/{token}/cx/job-details?reqId={j.get('reqId')}",
-                             publisher="ADP", req=j.get("clientRequisitionID")))
+            job = _job(f"adp_myjobs:{token}:{j.get('reqId')}", j.get("jobTitle"), company_name,
+                       "; ".join(filter(None, locs)) or None, posted=j.get("postingDate") or j.get("postDate"),
+                       link=f"https://myjobs.adp.com/{token}/cx/job-details?reqId={j.get('reqId')}",
+                       publisher="ADP", req=j.get("clientRequisitionID"))
+            job["_enrich"] = (adp_myjobs_details, (orgoid, j.get("reqId")))
+            jobs.append(job)
         skip += len(batch)
         if len(batch) < 100 or skip >= (data.get("count") or 0):
             break
     return jobs
+
+
+def adp_myjobs_details(job, orgoid, req_id):
+    """Description, qualifications, posted date and schedule for one ADP MyJobs opening."""
+    data = _json("GET", f"https://myjobs.adp.com/public/staffing/v1/job-requisitions/{req_id}",
+                 headers={"orgoid": orgoid})
+    reqs = data.get("jobRequisitions") or []
+    r = next((x for x in reqs if str(x.get("reqId")) == str(req_id)), reqs[0] if reqs else {})
+    parts = [html_to_text(r.get("jobDescription")), html_to_text(r.get("jobQualifications"))]
+    if any(parts):
+        job["job_description"] = "\n\n".join(p for p in parts if p)
+    if r.get("postingDate"):
+        job["job_posted_at_datetime_utc"] = r["postingDate"]
+    if r.get("workLevelCode"):
+        job["job_employment_type"] = r["workLevelCode"]
 
 
 def fetch_jobsyn(token, company_name, query, locations=None):

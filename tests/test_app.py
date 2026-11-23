@@ -708,3 +708,16 @@ class DistanceAreaTests(FreshDbTest):
         self.assertEqual(self.client.put("/api/settings/area", json={"home": "Newark, OH", "radius_miles": 2}).status_code, 400)
         r = self.client.put("/api/settings/area", json={"home": "Newark, OH", "radius_miles": "40"})
         self.assertEqual(r.get_json(), {"home": "Newark, OH", "radius_miles": 40.0})
+
+
+class DetailPageTests(unittest.TestCase):
+    def test_talentegy_description_with_nested_divs(self):
+        page = ('<div class="Band Title">x</div><div class="Description"><p>Intro</p>'
+                '<div class="inner"><ul><li>401(k) with 6% match</li></ul></div><p>End</p></div><div class="footer">no</div>')
+        job = {"job_description": None}
+        with mock.patch.object(boards, "_request", return_value=mock.MagicMock(text=page)):
+            boards.talentegy_details(job, "https://x.example/job")
+        self.assertIn("Intro", job["job_description"])
+        self.assertIn("401(k) with 6% match", job["job_description"])
+        self.assertIn("End", job["job_description"])
+        self.assertNotIn("no", job["job_description"].split())

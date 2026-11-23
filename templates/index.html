@@ -18,7 +18,7 @@
     <div class="layout">
         <aside>
             <section class="panel">
-                <h2>New search</h2>
+                <h2>New JSearch</h2>
                 <form id="searchForm" onsubmit="return false;">
                     <label>Search for
                         <input id="fQuery" placeholder="e.g. business analyst" required>
@@ -95,6 +95,8 @@
                 </div>
                 <div class="select-links">Select: <a onclick="selectCompanies('free')">free only</a> ·
                     <a onclick="selectCompanies('none')">none</a></div>
+                <input id="companyFilter" class="company-filter" placeholder="Find a company…" oninput="renderCompanies()"
+                       aria-label="Find a company">
                 <label class="sort-companies">Sort
                     <select id="companySort" onchange="setCompanySort(this.value)">
                         <option value="priority">Priority</option>

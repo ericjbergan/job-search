@@ -85,12 +85,13 @@ function salaryText(job) {
 
 const WORK_MODE_LABELS = { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' };
 
-// Work style on the job card. A "?" means it was read from the description, not a field on the listing.
-function workModeBadge(job) {
-    if (!job.work_mode) return '<div class="work-mode none">work style not stated</div>';
+// Work style after the location on the job card ("Columbus, OH · Hybrid"). A "?" means it was
+// read from the description rather than a field on the listing.
+function workModeInline(job) {
+    if (!job.work_mode) return ' · <span class="work-mode none">work style not stated</span>';
     const guessed = job.work_mode_source === 'description';
     const tip = guessed ? 'Mentioned in the description; check the listing to confirm' : 'Listed on the posting';
-    return `<div class="work-mode ${esc(job.work_mode)}" title="${tip}">${esc(WORK_MODE_LABELS[job.work_mode] || job.work_mode)}${guessed ? '?' : ''}</div>`;
+    return ` · <span class="work-mode ${esc(job.work_mode)}" title="${tip}">${esc(WORK_MODE_LABELS[job.work_mode] || job.work_mode)}${guessed ? '?' : ''}</span>`;
 }
 
 function shortDate(iso) {
@@ -313,13 +314,33 @@ async function loadCompanies() {
     const how = getCompanySort();
     document.getElementById('companySort').value = how;
     state.companies = sortCompanies(await api('/api/companies'), how);
+    renderCompanies();
+}
+
+// Loose match for the company search box: "jpm" finds JPMorgan Chase, "childrens" finds Nationwide Children's,
+// and letters in order also match ("ntwd" -> Nationwide).
+function companyMatches(name, query) {
+    const n = name.toLowerCase().replace(/[^a-z0-9]/g, ''), q = query.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!q || n.includes(q)) return true;
+    let i = 0;
+    for (const ch of n) if (ch === q[i] && ++i === q.length) return true;
+    return false;
+}
+
+function renderCompanies() {
     const list = document.getElementById('companyList');
     if (state.companies.length === 0) {
         list.innerHTML = '<li class="empty">No companies yet. Click + Add.</li>';
         return;
     }
     updateCheckSelectedButton();
-    list.innerHTML = state.companies.map(c => {
+    const query = document.getElementById('companyFilter').value.trim();
+    const shown = state.companies.filter(c => companyMatches(c.name, query));
+    if (shown.length === 0) {
+        list.innerHTML = `<li class="empty">No company matches “${esc(query)}”.</li>`;
+        return;
+    }
+    list.innerHTML = shown.map(c => {
         const bits = [
             c.priority ? (state.priorities[c.priority] || `P${c.priority}`) : '',
             c.rating ? `★ ${c.rating}` : '',
@@ -593,10 +614,10 @@ function renderJobSummary(job) {
         <div class="job-summary" onclick="toggleJob(${job.id})">
             <div>
                 <div class="job-title">${esc(job.title)}</div>
-                <div class="job-sub">${esc(job.company || 'Unknown company')} · ${esc(job.location || 'Location not listed')}</div>
+                <div class="job-sub">${esc(job.company || 'Unknown company')} · ${esc(job.location || 'Location not listed')}${workModeInline(job)}</div>
                 ${job.employment_type ? `<span class="badge">${esc(job.employment_type)}</span> ` : ''}
                 ${job.req_number ? `<span class="badge req" title="Requisition / posting number">Req ${esc(job.req_number)}</span> ` : ''}
-                <span class="badge">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}</span>
+                <span class="badge status-badge ${esc(job.status)}">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}</span>
                 <div class="flag-buttons">
                     <button class="flag ${interested ? 'on interested' : ''}" onclick="toggleFlag(event, ${job.id}, 'interested', '${esc(job.status)}')">★ Interested</button>
                     <button class="flag ${applied ? 'on applied' : ''}" onclick="toggleFlag(event, ${job.id}, 'applied', '${esc(job.status)}')">✓ Applied</button>
@@ -608,7 +629,6 @@ function renderJobSummary(job) {
                 ${salary ? `<div class="salary" title="${esc(job.salary_text || '')}">${esc(salary)}</div>` : '<div class="no-pay">pay not listed</div>'}
                 <div>${job.posted_at ? 'posted ' + esc(shortDate(job.posted_at)) : ''}</div>
                 ${closes ? `<div class="${closes.startsWith('closed') ? 'closed' : 'closes'}">${esc(closes)}</div>` : ''}
-                ${workModeBadge(job)}
             </div>
         </div>
         <div class="job-detail hidden" id="detail-${job.id}"></div>
@@ -730,11 +750,15 @@ function fmtScore(v) {
 }
 
 // "Ret 4 · PTO 2 · Commute 1 · Bonus 3" under a company name; nothing if no scores yet.
+// "Ret 4 · PTO 1 · Commute 1 · Bonus 2"; unrated scores show as "–" so it's clear they haven't been set.
 function scoreLine(b) {
-    if (!b) return '';
-    const parts = SCORE_KEYS.filter(k => b[`${k}_score`] !== null && b[`${k}_score`] !== undefined)
-        .map(k => `${SCORE_SHORT[k]} ${fmtScore(b[`${k}_score`])}`);
-    return parts.length ? `<div class="score-line">${esc(parts.join(' · '))}</div>` : '';
+    b = b || {};
+    const parts = SCORE_KEYS.map(k => {
+        const v = b[`${k}_score`];
+        return `${SCORE_SHORT[k]} ${v === null || v === undefined ? '–' : fmtScore(v)}`;
+    });
+    const unrated = SCORE_KEYS.every(k => b[`${k}_score`] === null || b[`${k}_score`] === undefined);
+    return `<div class="score-line ${unrated ? 'unrated' : ''}">${esc(parts.join(' · '))}</div>`;
 }
 
 function jobBenefitsHtml(job) {
