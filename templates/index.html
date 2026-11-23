@@ -95,8 +95,13 @@
                 </div>
                 <div class="select-links">Select: <a onclick="selectCompanies('free')">free only</a> ·
                     <a onclick="selectCompanies('none')">none</a></div>
-                <input id="companyFilter" class="company-filter" placeholder="Find a company…" oninput="renderCompanies()"
-                       aria-label="Find a company">
+                <div class="company-filter-row">
+                    <input id="companyFilter" class="company-filter" placeholder="Find a company…" oninput="renderCompanies()"
+                           aria-label="Find a company by name or priority">
+                    <select id="priorityFilter" onchange="renderCompanies()" aria-label="Show one priority">
+                        <option value="">All priorities</option>
+                    </select>
+                </div>
                 <label class="sort-companies">Sort
                     <select id="companySort" onchange="setCompanySort(this.value)">
                         <option value="priority">Priority</option>

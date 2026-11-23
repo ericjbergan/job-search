@@ -317,14 +317,20 @@ async function loadCompanies() {
     renderCompanies();
 }
 
-// Loose match for the company search box: "jpm" finds JPMorgan Chase, "childrens" finds Nationwide Children's,
-// and letters in order also match ("ntwd" -> Nationwide).
+// Company search box: the name (or priority) contains what's typed, ignoring case and punctuation,
+// so "childrens" finds Nationwide Children's and "jp" finds JPMorgan Chase.
 function companyMatches(name, query) {
-    const n = name.toLowerCase().replace(/[^a-z0-9]/g, ''), q = query.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!q || n.includes(q)) return true;
-    let i = 0;
-    for (const ch of n) if (ch === q[i] && ++i === q.length) return true;
-    return false;
+    const clean = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return !query || clean(name).includes(clean(query));
+}
+
+// Priority choices for the dropdown, built once from the app's priority list.
+function fillPriorityFilter() {
+    const select = document.getElementById('priorityFilter');
+    if (select.options.length > 1 || !state.priorities) return;
+    select.innerHTML = '<option value="">All priorities</option>' +
+        Object.entries(state.priorities).map(([key, label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('') +
+        '<option value="none">No priority</option>';
 }
 
 function renderCompanies() {
@@ -334,10 +340,18 @@ function renderCompanies() {
         return;
     }
     updateCheckSelectedButton();
+    fillPriorityFilter();
     const query = document.getElementById('companyFilter').value.trim();
-    const shown = state.companies.filter(c => companyMatches(c.name, query));
+    const priority = document.getElementById('priorityFilter').value;
+    // The text box matches the name or the priority label ("m" finds Liberty Mutual and Medium companies);
+    // the dropdown narrows to one priority.
+    const shown = state.companies.filter(c => {
+        const label = c.priority ? (state.priorities[c.priority] || '') : '';
+        if (priority === 'none' ? c.priority : priority && String(c.priority) !== priority) return false;
+        return companyMatches(c.name, query) || (label && companyMatches(label, query));
+    });
     if (shown.length === 0) {
-        list.innerHTML = `<li class="empty">No company matches “${esc(query)}”.</li>`;
+        list.innerHTML = `<li class="empty">No company matches${query ? ` “${esc(query)}”` : ''}${priority ? ' at that priority' : ''}.</li>`;
         return;
     }
     list.innerHTML = shown.map(c => {

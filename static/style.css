@@ -258,3 +258,6 @@ button.flag.save-co-btn:hover { background: #eaf1fd; }
 .job-sub .work-mode.none { font-size: 12px; padding: 0; }
 .score-line.unrated { color: #999; }
 .company-filter { margin: 0 0 8px; padding: 6px 8px; font-size: 13px; }
+.company-filter-row { display: flex; gap: 6px; margin: 0 0 8px; }
+.company-filter-row .company-filter { margin: 0; flex: 1; min-width: 0; }
+.company-filter-row select { width: auto; margin: 0; padding: 5px 6px; font-size: 13px; }
