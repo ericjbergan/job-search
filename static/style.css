@@ -321,3 +321,30 @@ button.flag.save-co-btn:hover { background: #eaf1fd; }
 .saved-heading { font-size: 14px; margin: 18px 0 8px; padding-top: 12px; border-top: 1px solid #eee; color: #1f3a5f; }
 .badge.status-badge.rejected { background: #000; color: #fff; }
 .add-job-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Job details: read-only until Edit is clicked */
+.job-edit-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.job-edit-head h4 { margin: 0; }
+.job-edit .edit-form { display: none; }
+.job-edit.editing .edit-form { display: block; }
+.job-edit.editing .details-view, .job-edit.editing .edit-btn { display: none; }
+.details-view { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 12px; margin: 0; }
+.details-view .wide { grid-column: 1 / -1; }
+.details-view dt { font-size: 12px; color: #666; }
+.details-view dd { margin: 0; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.empty-details { display: block; font-size: 13px; color: #888; }
+@media (max-width: 700px) { .details-view { grid-template-columns: 1fr; } }
+
+/* "+ Add" (companies) and "+ Add Job" stand out: larger and green */
+button.add-btn { background: #1e8e3e; font-size: 14px; font-weight: 600; padding: 7px 16px; }
+button.add-btn:hover { background: #18773a; filter: none; }
+
+/* Tools stay on screen while scrolling the results: the sidebar scrolls on its own,
+   and the add-job / filter / sort bar stays at the top of the results. */
+aside { position: sticky; top: 0; max-height: 100vh; overflow-y: auto; padding-bottom: 8px; }
+.results-tools { position: sticky; top: 0; z-index: 5; background: #f4f5f7; padding: 10px 0 2px;
+                 margin-top: -10px; max-height: 85vh; overflow-y: auto; box-shadow: 0 6px 6px -6px rgba(0,0,0,0.15); }
+.results-tools .filters { margin-bottom: 8px; }
+@media (max-width: 860px) {
+    aside { position: static; max-height: none; overflow: visible; }
+}

@@ -85,7 +85,7 @@
                     <div class="buttons">
                         <button class="small" id="checkSelectedBtn" onclick="checkSelectedCompanies(this)" disabled>Check selected</button>
                         <button class="small secondary" id="checkAllBtn" onclick="checkAllCompanies(this)">Check all</button>
-                        <button class="small" onclick="showCompanyForm()">+ Add</button>
+                        <button class="add-btn" onclick="showCompanyForm()">+ Add</button>
                     </div>
                 </div>
                 <div class="panel-body">
@@ -167,9 +167,10 @@
         </aside>
 
         <main>
+            <div class="results-tools">
             <div class="add-job">
                 <div class="add-job-buttons">
-                    <button class="small" id="addJobToggle" onclick="toggleAddJob()">+ Add a job from its listing link</button>
+                    <button class="add-btn" id="addJobToggle" onclick="toggleAddJob()" title="Add a job from its listing link">+ Add Job</button>
                     <button class="small secondary" onclick="document.getElementById('sheetFile').click()"
                             title="Add or update jobs from her Job Hunt spreadsheet (.xlsx)">Import spreadsheet…</button>
                     <input type="file" id="sheetFile" accept=".xlsx" class="hidden" onchange="importSpreadsheet(this)">
@@ -224,6 +225,7 @@
                     <button type="button" class="small secondary reset-btn" onclick="resetJobFilters()"
                             title="Show all jobs: clear the text, work style, interest, status and company/search filters">Reset filters</button>
                 </div>
+            </div>
             </div>
 
             <div id="jobList" class="job-list"></div>

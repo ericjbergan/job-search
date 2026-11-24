@@ -821,12 +821,6 @@ async function openJob(jobId, closeOthers) {
             ${apply ? `<a class="apply" href="${apply}" target="_blank" rel="noopener noreferrer">Go to listing ↗</a>` : ''}
             ${apply ? `<button class="small secondary" onclick="reloadJob(${job.id}, this)" title="Read the listing page again to fill in the description and details">Reload from listing</button>` : ''}
         </div>
-        <div class="notes-row">
-            <label>Notes
-                <textarea id="notes-${job.id}">${esc(job.notes || '')}</textarea>
-            </label>
-            <button class="small" onclick="updateJob(${job.id}, { notes: document.getElementById('notes-${job.id}').value })">Save notes</button>
-        </div>
         ${jobEditHtml(job)}
         ${jobBenefitsHtml(job)}
         <div class="description">${esc(job.description || 'No description provided.')}</div>
@@ -907,7 +901,7 @@ async function saveJobCompany(event, jobId) {
 // Listing details (filled in from the site, editable) and her own application fields.
 // Listing fields are sent only when changed, so ones she hasn't touched keep updating from the site.
 const LISTING_FIELDS = ['req_number', 'pay', 'work_mode', 'location', 'posted_at'];
-const OWN_TEXT_FIELDS = ['resume_submitted', 'response_date', 'resume_link', 'listing_copy_location', 'callback_chances'];
+const OWN_TEXT_FIELDS = ['resume_submitted', 'response_date', 'resume_link', 'listing_copy_location', 'callback_chances', 'notes'];
 const OWN_CHECK_FIELDS = ['cover_letter', 'interviewed'];
 
 function jobEditHtml(job) {
@@ -921,7 +915,12 @@ function jobEditHtml(job) {
                       location: job.location || '', posted_at: (job.posted_at || '').slice(0, 10) };
     return `
         <div class="job-edit" data-initial="${esc(JSON.stringify(initial))}" id="edit-${id}">
-            <h4>Job details</h4>
+            <div class="job-edit-head">
+                <h4>Job details</h4>
+                <button class="small secondary edit-btn" onclick="setJobEditing(${id}, true)">Edit</button>
+            </div>
+            ${jobDetailsView(job, payNow)}
+            <div class="edit-form">
             <div class="edit-grid">
                 ${field('req_number', 'Reference Number', `<input id="e-req_number-${id}" maxlength="100" value="${v('req_number')}">`)}
                 ${field('posted_at', 'Date Posted', `<input type="date" id="e-posted_at-${id}" value="${day(job.posted_at)}">`)}
@@ -942,9 +941,41 @@ function jobEditHtml(job) {
                     ${safeUrl(job.resume_link) ? `<a href="${safeUrl(job.resume_link)}" target="_blank" rel="noopener noreferrer">Open ↗</a>` : ''}</span></label>
                 <label class="wide">Job listing copy location <input id="e-listing_copy_location-${id}" maxlength="100" value="${v('listing_copy_location')}"></label>
                 <label class="wide">Chances of a call back &amp; why <textarea id="e-callback_chances-${id}" maxlength="250">${v('callback_chances')}</textarea></label>
+                <label class="wide">Notes <textarea id="e-notes-${id}">${v('notes')}</textarea></label>
             </div>
             <button class="small" onclick="saveJobDetails(${id})">Save details</button>
+            <button class="small secondary" onclick="openJob(${id}, false)">Cancel</button>
+            </div>
         </div>`;
+}
+
+// Read-only view of the details: only the ones that have something in them.
+function jobDetailsView(job, payNow) {
+    const yesNo = val => (val === null || val === undefined || val === '') ? '' : (val ? 'Yes' : 'No');
+    const modes = { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' };
+    const link = safeUrl(job.resume_link);
+    const items = [
+        ['Reference Number', esc(job.req_number || '')],
+        ['Date Posted', esc(shortDate(job.posted_at) || '')],
+        ['Pay', esc(payNow || '')],
+        ['Work Style', esc(modes[job.work_mode] || '')],
+        ['Location', esc(job.location || '')],
+        ['Resume Submitted', esc(shortDate(job.resume_submitted) || '')],
+        ['Response to Resume', esc(shortDate(job.response_date) || '')],
+        ['Cover letter included', yesNo(job.cover_letter)],
+        ['Interview', yesNo(job.interviewed)],
+        ['Resume Update page', link ? `<a href="${link}" target="_blank" rel="noopener noreferrer">${esc(job.resume_link)}</a>` : esc(job.resume_link || ''), 'wide'],
+        ['Job listing copy location', esc(job.listing_copy_location || ''), 'wide'],
+        ['Chances of a call back & why', esc(job.callback_chances || ''), 'wide'],
+        ['Notes', esc(job.notes || ''), 'wide'],
+    ].filter(([, value]) => value);
+    if (!items.length) return '<div class="details-view empty-details">Nothing filled in yet. Click Edit to add details.</div>';
+    return `<dl class="details-view">${items.map(([label, value, cls]) =>
+        `<div class="${cls || ''}"><dt>${esc(label)}</dt><dd>${value}</dd></div>`).join('')}</dl>`;
+}
+
+function setJobEditing(jobId, editing) {
+    document.getElementById(`edit-${jobId}`).classList.toggle('editing', editing);
 }
 
 async function saveJobDetails(jobId) {
