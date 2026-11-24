@@ -168,7 +168,12 @@
 
         <main>
             <div class="add-job">
-                <button class="small" id="addJobToggle" onclick="toggleAddJob()">+ Add a job from its listing link</button>
+                <div class="add-job-buttons">
+                    <button class="small" id="addJobToggle" onclick="toggleAddJob()">+ Add a job from its listing link</button>
+                    <button class="small secondary" onclick="document.getElementById('sheetFile').click()"
+                            title="Add or update jobs from her Job Hunt spreadsheet (.xlsx)">Import spreadsheet…</button>
+                    <input type="file" id="sheetFile" accept=".xlsx" class="hidden" onchange="importSpreadsheet(this)">
+                </div>
                 <div id="addJobPanel" class="panel hidden">
                     <label>Link to the job on the company's careers page
                         <input id="ajUrl" placeholder="https://… (paste the listing's web address)" onkeydown="if (event.key === 'Enter') previewJob(document.getElementById('ajReadBtn'))">

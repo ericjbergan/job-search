@@ -3,6 +3,7 @@
 No network: JSearch and job-board calls are replaced with fixtures.
 """
 
+import io
 import json
 import shutil
 import sqlite3
@@ -1005,3 +1006,88 @@ class FillGapsTests(unittest.TestCase):
 
     def test_skips_jobs_already_read_by_chatgpt(self):
         self.assertEqual(self.run_fill({"job_description": self.TEXT, "job_read_by_ai": True}, {"pay": "$85,000"}), [])
+
+
+def make_xlsx(rows, links=None):
+    """A minimal .xlsx: rows = {row number: {column letter: text}}, links = {"G6": url}."""
+    import io, zipfile
+    from xml.sax.saxutils import escape
+    links = links or {}
+    cells = "".join(
+        f'<row r="{n}">' + "".join(f'<c r="{c}{n}" t="inlineStr"><is><t>{escape(str(v))}</t></is></c>'
+                                   for c, v in sorted(cols.items())) + "</row>"
+        for n, cols in sorted(rows.items()))
+    hl = "".join(f'<hyperlink ref="{ref}" r:id="rId{i}"/>' for i, ref in enumerate(links, 1))
+    sheet = ('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+             'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+             f'<sheetData>{cells}</sheetData>' + (f"<hyperlinks>{hl}</hyperlinks>" if hl else "") + "</worksheet>")
+    rels = ('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+            "".join(f'<Relationship Id="rId{i}" Type="hyperlink" Target="{escape(u)}" TargetMode="External"/>'
+                    for i, u in enumerate(links.values(), 1)) + "</Relationships>")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                   '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+        z.writestr("xl/worksheets/_rels/sheet1.xml.rels", rels)
+    return buf.getvalue()
+
+
+class JobHuntImportTests(FreshDbTest):
+    HEADER = {"B": "Status", "C": "Interest", "E": "Company", "F": "Source #", "G": "Job Title - Link to job listing",
+              "H": "Salary", "I": "Location", "J": "Remote/Hybrid", "K": "Cov Ltr", "L": "Resume", "N": "Will they contact me & Why?",
+              "O": "Response to Resume", "P": "Interview", "Q": "Posted", "S": "Retirement Ranking", "W": "My Notes", "X": "Source"}
+
+    def sheet(self):
+        return make_xlsx({
+            1: {"B": "Job Applications"},
+            4: self.HEADER,
+            5: {"B": "Rejected", "C": "Medium", "E": "Acme Ins.", "F": "ID: R20025", "G": "Tech Business Analyst Sr",
+                "H": "88-109k", "I": "New Albany OH", "J": "On-Site", "K": "No", "L": "46337", "O": "46346", "P": "N/A",
+                "Q": "46330", "S": "2.75", "W": "Bad pay", "X": "Acme Site"},
+            6: {"B": "Won't apply", "C": "Med-High", "E": "Beta Co", "F": "?", "G": "Sr BA", "H": "???", "I": "Remote",
+                "J": "Remote ok", "Q": "11/05/2026 (Closing 1/05/2027)", "N": "Maybe - strong fit"},
+            7: {"B": "Applied", "C": "High", "E": "Gamma", "G": "Product Owner", "H": "105k", "I": "Columbus, OH", "J": "???",
+                "K": "Yes", "L": "46343", "X": "LinkedIn"},
+        }, links={"G5": "https://acme.example/jobs/R20025", "G7": "https://gamma.example/po"})
+
+    def test_parse_maps_columns(self):
+        from jobsearch import jobhunt
+        a, b, c = jobhunt.parse(self.sheet())
+        self.assertEqual((a["status"], a["interest_level"], a["req_number"], a["salary_min"], a["salary_max"]),
+                         ("rejected", "medium", "R20025", 88000, 109000))
+        self.assertEqual((a["work_mode"], a["cover_letter"], a["resume_submitted"], a["response_date"], a["posted_at"]),
+                         ("onsite", 0, "2026-11-11", "2026-11-20", "2026-11-04"))
+        self.assertEqual(a["apply_link"], "https://acme.example/jobs/R20025")
+        self.assertIn("Spreadsheet rankings: Retirement 2.75", a["notes"])
+        self.assertEqual((b["status"], b["interest_level"], b["req_number"], b["location"], b["work_mode"]),
+                         ("not_a_fit", "high", None, None, "remote"))
+        self.assertEqual((b["posted_at"], b["closes_at"], b["salary_min"]), ("2026-11-05", "2027-01-05", None))
+        self.assertEqual((c["salary_min"], c["work_mode"], c["cover_letter"]), (105000, None, 1))
+
+    def test_import_adds_then_updates_and_links_companies(self):
+        cid = db.add_company({"name": "Acme Ins", "ats": "search"})
+        r = self.client.post("/api/jobs/import/spreadsheet",
+                             data={"file": (io.BytesIO(self.sheet()), "Job Hunt.xlsx")}, content_type="multipart/form-data")
+        self.assertEqual(r.get_json(), {"added": 3, "updated": 0, "rows": 3})
+        jobs = {j["title"]: j for j in db.list_jobs()}
+        acme = db.get_job(jobs["Tech Business Analyst Sr"]["id"])
+        self.assertEqual((acme["status"], acme["company_id"], acme["req_number"], acme["found_where"], acme["added_by_hand"]),
+                         ("rejected", cid, "R20025", "Acme Site", 1))
+        self.assertEqual(sorted(json.loads(acme["edited_fields"])), ["location", "pay", "posted_at", "req_number", "work_mode"])
+        gamma = db.get_job(jobs["Product Owner"]["id"])
+        self.assertEqual((gamma["status"], gamma["applied_at"], gamma["interest_level"]), ("applied", "2026-11-17", "high"))
+        # A second import updates the same jobs instead of adding copies.
+        again = self.client.post("/api/jobs/import/spreadsheet",
+                                 data={"file": (io.BytesIO(self.sheet()), "Job Hunt.xlsx")}, content_type="multipart/form-data")
+        self.assertEqual(again.get_json(), {"added": 0, "updated": 3, "rows": 3})
+        self.assertEqual(len(db.list_jobs()), 3)
+        self.assertEqual(db.get_job(acme["id"])["notes"].count("Bad pay"), 1)
+
+    def test_rejects_non_spreadsheets(self):
+        r = self.client.post("/api/jobs/import/spreadsheet", data={"file": (io.BytesIO(b"hello"), "notes.txt")},
+                             content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400)

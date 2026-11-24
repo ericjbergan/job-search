@@ -802,6 +802,43 @@ def refresh_job(job_id, fresh):
     return [c for c in changes if c != "last_seen_at"]
 
 
+def apply_spreadsheet_row(job_id, row, mark_by_hand=False):
+    """Write one row of her Job Hunt spreadsheet onto a saved job. Her values win over the
+    listing's, and the listing details she supplied are marked edited so checks keep them."""
+    with connect() as conn:
+        cur = conn.execute("SELECT notes, edited_fields FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not cur:
+            return
+        sets = {"status": row["status"], "interest_level": row.get("interest_level")}
+        for col in ("cover_letter", "resume_submitted", "resume_link", "callback_chances", "response_date",
+                    "interviewed", "found_where"):
+            if row.get(col) is not None:
+                sets[col] = row[col]
+        if row["status"] == "applied" and row.get("resume_submitted"):
+            sets["applied_at"] = row["resume_submitted"]
+        if row.get("notes") and row["notes"] not in (cur["notes"] or ""):
+            sets["notes"] = (cur["notes"] + "\n\n" if cur["notes"] else "") + row["notes"]
+        listing = {"req_number": {"req_number": row.get("req_number")},
+                   "pay": {"salary_min": row.get("salary_min"), "salary_max": row.get("salary_max"),
+                           "salary_period": "YEAR" if row.get("salary_min") else None, "salary_text": row.get("salary_text")},
+                   "work_mode": {"work_mode": row.get("work_mode"), "work_mode_source": "manual",
+                                 "is_remote": int(row.get("work_mode") == "remote")},
+                   "location": {"location": row.get("location")},
+                   "posted_at": {"posted_at": row.get("posted_at")}}
+        provided = {name: cols for name, cols in listing.items()
+                    if any(v not in (None, "", "manual", 0) for v in cols.values())}
+        for cols in provided.values():
+            sets.update(cols)
+        if row.get("closes_at"):
+            sets["closes_at"] = row["closes_at"]
+        if provided:
+            edited = set(json.loads(cur["edited_fields"] or "[]")) | set(provided)
+            sets["edited_fields"] = json.dumps(sorted(edited))
+        if mark_by_hand:
+            sets["added_by_hand"] = 1
+        conn.execute(f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?", (*sets.values(), job_id))
+
+
 def find_job_id(source_job_id):
     """Row id for a job by its source id, following merged duplicates."""
     with connect() as conn:

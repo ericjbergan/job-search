@@ -988,6 +988,27 @@ async function reloadJob(jobId, button) {
     }
 }
 
+// Add or update jobs from her Job Hunt spreadsheet.
+async function importSpreadsheet(input) {
+    const file = input.files[0];
+    input.value = '';
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    showMessage(`Importing ${file.name}…`);
+    try {
+        const response = await fetch('/api/jobs/import/spreadsheet', { method: 'POST', body: form });
+        const r = await response.json();
+        if (!response.ok) throw new Error(r.error || 'Import failed');
+        state.status = ''; state.searchId = null; state.companyId = null;
+        await refreshAll();
+        showMessage(`Imported ${r.rows} jobs from ${file.name}: ${r.added} added, ${r.updated} already in the app and updated.`);
+        scrollToResults();
+    } catch (e) {
+        showMessage(e.message, true);
+    }
+}
+
 // --- add a job from its listing link ----------------------------------------------
 
 const addJobState = { job: null };

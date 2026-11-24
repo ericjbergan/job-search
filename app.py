@@ -10,7 +10,7 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import benefits, boards, db, geo, importer, jsearch
+from jobsearch import benefits, boards, db, geo, importer, jobhunt, jsearch
 from jobsearch.pay import format_pay
 
 app = Flask(__name__)
@@ -310,6 +310,21 @@ def api_reload_job(job_id):
         by_ai = []  # ChatGPT unavailable: keep what the site gave
     changed = db.refresh_job(job_id, fresh)
     return jsonify({"changed": changed, "filled_by_chatgpt": by_ai, "job": db.get_job(job_id)})
+
+
+@app.route("/api/jobs/import/spreadsheet", methods=["POST"])
+def api_import_spreadsheet():
+    """Import her Job Hunt spreadsheet (.xlsx). The file is read here and not kept."""
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return _error("Choose the spreadsheet file to import")
+    if not upload.filename.lower().endswith(".xlsx"):
+        return _error("Save the spreadsheet as an Excel .xlsx file first")
+    try:
+        jobs = jobhunt.parse(upload.read())
+    except jobhunt.SheetError as e:
+        return _error(str(e))
+    return jsonify({**jobhunt.import_jobs(jobs), "rows": len(jobs)})
 
 
 @app.route("/api/jobs/import/preview", methods=["POST"])

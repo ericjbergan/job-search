@@ -131,7 +131,7 @@ button.danger { background: #c0392b; }
 .job.status-applied { border-left-color: #0072C8; }
 .job.status-interviewing { border-left-color: #8e44ad; }
 .job.status-offer { border-left-color: #28a745; }
-.job.status-rejected { border-left-color: #bbb; opacity: 0.75; }
+.job.status-rejected { border-left-color: #000; }
 .job.status-not_a_fit { border-left-color: #A6A6A6; opacity: 0.75; }
 
 .job-summary {
@@ -319,3 +319,5 @@ button.flag.save-co-btn:hover { background: #eaf1fd; }
 .panel.collapsed .panel-head { margin-bottom: 0; }
 .panel h3#searchFormTitle { font-size: 14px; margin: 0 0 10px; color: #1f3a5f; }
 .saved-heading { font-size: 14px; margin: 18px 0 8px; padding-top: 12px; border-top: 1px solid #eee; color: #1f3a5f; }
+.badge.status-badge.rejected { background: #000; color: #fff; }
+.add-job-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
