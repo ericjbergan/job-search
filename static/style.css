@@ -290,3 +290,32 @@ button.flag.save-co-btn:hover { background: #eaf1fd; }
 .status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
 .status-row #statusTabs { display: contents; }
 .status-row .hide-not-fit { margin: 0 0 0 4px; font-size: 13px; white-space: nowrap; }
+
+/* Jobs added from their listing link */
+.badge.by-hand { background: #ede7f6; color: #4527a0; }
+.badge.found { background: #fff3e0; color: #8a4b00; }
+.aj-interest { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; margin: 4px 0 12px; }
+.aj-interest label.check { margin: 0; }
+
+/* Job details she can add or correct (opened job) */
+.job-edit { border: 1px solid #e3e6ea; border-radius: 6px; padding: 10px 12px; margin: 0 0 12px; background: #fafbfc; }
+.job-edit h4 { margin: 0 0 8px; font-size: 13px; color: #1f3a5f; text-transform: uppercase; letter-spacing: 0.03em; }
+.edit-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px 12px; margin-bottom: 8px; }
+.edit-grid label { margin-bottom: 6px; }
+.edit-grid .wide { grid-column: 1 / -1; }
+.edit-grid .checks { display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; margin-bottom: 8px; }
+.edit-grid .checks label { margin: 0; }
+.edit-grid textarea { min-height: 48px; resize: vertical; }
+.edit-grid .edited { font-size: 10px; color: #8a4b00; background: #fff3e0; border-radius: 6px; padding: 0 5px; }
+.link-row { display: flex; gap: 8px; align-items: center; }
+.link-row a { white-space: nowrap; font-size: 13px; }
+@media (max-width: 700px) { .edit-grid { grid-template-columns: 1fr; } }
+
+/* Collapsible sidebar cards (JSearch, Companies) */
+.collapse-toggle { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; }
+.collapse-toggle .chev { display: inline-block; font-size: 13px; color: #888; transition: transform 0.15s; }
+.panel.collapsed .chev { transform: rotate(-90deg); }
+.panel.collapsed .panel-body { display: none; }
+.panel.collapsed .panel-head { margin-bottom: 0; }
+.panel h3#searchFormTitle { font-size: 14px; margin: 0 0 10px; color: #1f3a5f; }
+.saved-heading { font-size: 14px; margin: 18px 0 8px; padding-top: 12px; border-top: 1px solid #eee; color: #1f3a5f; }

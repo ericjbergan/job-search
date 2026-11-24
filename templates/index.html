@@ -17,8 +17,13 @@
 
     <div class="layout">
         <aside>
-            <section class="panel">
-                <h2 id="searchFormTitle">New JSearch</h2>
+            <section class="panel collapsible" id="jsearchPanel">
+                <div class="panel-head">
+                    <h2 class="collapse-toggle" onclick="togglePanel('jsearchPanel')" title="Show or hide">
+                        <span class="chev">▾</span> JSearch</h2>
+                </div>
+                <div class="panel-body">
+                <h3 id="searchFormTitle">New JSearch</h3>
                 <input type="hidden" id="fEditId">
                 <form id="searchForm" onsubmit="return false;">
                     <label>Search for
@@ -68,22 +73,22 @@
                         <button type="button" class="secondary" onclick="cancelSearchEdit()">Cancel</button>
                     </div>
                 </form>
-            </section>
-
-            <section class="panel">
-                <h2>Saved searches</h2>
+                <h3 class="saved-heading">Saved searches</h3>
                 <ul id="savedSearches" class="saved-list"></ul>
+                </div>
             </section>
 
-            <section class="panel">
+            <section class="panel collapsible" id="companiesPanel">
                 <div class="panel-head">
-                    <h2>Companies</h2>
+                    <h2 class="collapse-toggle" onclick="togglePanel('companiesPanel')" title="Show or hide">
+                        <span class="chev">▾</span> Companies</h2>
                     <div class="buttons">
                         <button class="small" id="checkSelectedBtn" onclick="checkSelectedCompanies(this)" disabled>Check selected</button>
                         <button class="small secondary" id="checkAllBtn" onclick="checkAllCompanies(this)">Check all</button>
                         <button class="small" onclick="showCompanyForm()">+ Add</button>
                     </div>
                 </div>
+                <div class="panel-body">
                 <div class="default-titles">
                     <label for="defaultKeywords">Job titles to search at every company</label>
                     <div class="default-titles-row">
@@ -157,6 +162,7 @@
                     </div>
                 </form>
                 <ul id="companyList" class="saved-list"></ul>
+                </div>
             </section>
         </aside>
 

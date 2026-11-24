@@ -193,29 +193,23 @@ def _dayforce(url, token):
 
 def _jsonld(url, page):
     """The schema.org JobPosting block many careers pages embed."""
-    for block in re.findall(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.S):
-        try:
-            data = json.loads(block.strip())
-        except ValueError:
-            continue
-        for item in (data if isinstance(data, list) else data.get("@graph", [data]) if isinstance(data, dict) else []):
-            if not (isinstance(item, dict) and item.get("@type") == "JobPosting"):
-                continue
-            org = item.get("hiringOrganization")
-            company = org.get("name") if isinstance(org, dict) else org
-            locs = []
-            for place in (item.get("jobLocation") if isinstance(item.get("jobLocation"), list) else [item.get("jobLocation")]):
-                addr = (place or {}).get("address") if isinstance(place, dict) else None
-                if isinstance(addr, dict):
-                    bits = [addr.get("addressLocality"), addr.get("addressRegion"),
-                            addr.get("addressCountry") if isinstance(addr.get("addressCountry"), str) else None]
-                    locs.append(", ".join(b for b in bits if b and str(b).strip().lower() not in ("unavailable", "n/a", "none")))
-            job = boards._job(f"url:{_url_key(url)}", boards.html_to_text(item.get("title")),
-                              boards.html_to_text(company) if company else None, "; ".join(filter(None, locs)) or None,
-                              link=url, publisher=_site_name(url))
-            boards._apply_jsonld(job, item)
-            return job
-    return None
+    item = boards.jsonld_posting(page)
+    if not item:
+        return None
+    org = item.get("hiringOrganization")
+    company = org.get("name") if isinstance(org, dict) else org
+    locs = []
+    for place in (item.get("jobLocation") if isinstance(item.get("jobLocation"), list) else [item.get("jobLocation")]):
+        addr = (place or {}).get("address") if isinstance(place, dict) else None
+        if isinstance(addr, dict):
+            bits = [addr.get("addressLocality"), addr.get("addressRegion"),
+                    addr.get("addressCountry") if isinstance(addr.get("addressCountry"), str) else None]
+            locs.append(", ".join(b for b in bits if b and str(b).strip().lower() not in ("unavailable", "n/a", "none")))
+    job = boards._job(f"url:{_url_key(url)}", boards.html_to_text(item.get("title")),
+                      boards.html_to_text(company) if company else None, "; ".join(filter(None, locs)) or None,
+                      link=url, publisher=_site_name(url))
+    boards._apply_jsonld(job, item)
+    return job
 
 
 # --- ChatGPT fallback ------------------------------------------------------------
@@ -242,11 +236,75 @@ def _from_text(url, text):
         raise ImportFailed("ChatGPT's answer couldn't be read; try again")
     if not d.get("title"):
         raise ImportFailed("Couldn't find a job title in that text")
-    return boards._job(f"url:{_url_key(url)}" if url else f"text:{hashlib.sha1(text.encode()).hexdigest()[:16]}",
-                       d.get("title"), d.get("company"), d.get("location"), link=url or None,
-                       publisher=_site_name(url) if url else "Added by hand", description=text,
-                       employment_type=d.get("employment_type"), salary=d.get("pay"), req=d.get("req_number"),
-                       posted=d.get("posted_date"), closes=d.get("closing_date"), work_mode=d.get("work_style"))
+    job = boards._job(f"url:{_url_key(url)}" if url else f"text:{hashlib.sha1(text.encode()).hexdigest()[:16]}",
+                      d.get("title"), d.get("company"), d.get("location"), link=url or None,
+                      publisher=_site_name(url) if url else "Added by hand", description=text,
+                      employment_type=d.get("employment_type"), salary=d.get("pay"), req=d.get("req_number"),
+                      posted=d.get("posted_date"), closes=d.get("closing_date"), work_mode=d.get("work_style"))
+    job["job_read_by_ai"] = True  # already read by ChatGPT; fill_gaps has nothing to add
+    return job
+
+
+def _digits(text):
+    return re.findall(r"\d[\d,]*", text or "")
+
+
+def fill_gaps(job):
+    """Have ChatGPT read the job's description for details the site's own data left out
+    (pay, work style, location, dates, reference number, job type). Only empty fields are
+    filled, and each value is checked against the text so nothing can be invented.
+    Returns the names of what was filled in."""
+    text = re.sub(r"\n{3,}", "\n\n", (job.get("job_description") or "").strip())[:MAX_TEXT]
+    if len(text) < 200 or not os.getenv("OPENAI_API_KEY") or job.get("job_read_by_ai"):
+        return []
+    resp = benefits._client().chat.completions.create(
+        model=benefits.MODEL, temperature=0, response_format={"type": "json_object"},
+        messages=[{"role": "system", "content": _EXTRACT}, {"role": "user", "content": text}])
+    try:
+        d = json.loads(resp.choices[0].message.content)
+    except ValueError:
+        return []
+    norm_text, text_digits = boards.norm(text), set(_digits(text))
+    filled = []
+
+    has_pay = job.get("job_min_salary") or job.get("job_max_salary") or job.get("job_salary_string")
+    pay = (d.get("pay") or "").strip()
+    if pay and not has_pay and _digits(pay) and all(n in text_digits for n in _digits(pay)):
+        job["job_salary_string"] = pay
+        filled.append("pay")
+
+    style = (d.get("work_style") or "").strip().lower().replace("-", "")
+    if style in ("remote", "hybrid", "onsite") and not job.get("job_work_mode"):
+        words = {"remote": r"\bremote\b", "hybrid": r"\bhybrid\b", "onsite": r"\bon-?site\b|\bin[- ]office\b"}
+        if re.search(words[style], text, re.I):
+            job["job_work_mode_inferred"] = style   # shown with "?" (read from the description)
+            filled.append("work style")
+
+    loc = (d.get("location") or "").strip()
+    vague = boards.location_unknown({"job_location": job.get("job_location")})
+    # "Remote" / "Hybrid" / "Anywhere" describe the work style, not a place.
+    not_a_place = boards.norm(loc) in ("remote", "hybrid", "onsite", "on site", "anywhere", "virtual",
+                                       "united states", "usa", "us", "remote us", "remote usa")
+    if loc and vague and not not_a_place and boards.norm(loc.split(",")[0].split(";")[0]) in norm_text:
+        job["job_location"] = loc
+        filled.append("location")
+
+    req = (d.get("req_number") or "").strip()
+    if req and not job.get("job_req_id") and boards.norm(req) in norm_text:
+        job["job_req_id"] = req
+        filled.append("reference number")
+
+    for key, field, label in (("posted_date", "job_posted_at_datetime_utc", "date posted"),
+                              ("closing_date", "job_closes_at", "closing date")):
+        value = (d.get(key) or "").strip()
+        if value and not job.get(field) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) and value[:4] in text:
+            job[field] = value
+            filled.append(label)
+
+    if d.get("employment_type") and not job.get("job_employment_type"):
+        job["job_employment_type"] = d["employment_type"]
+        filled.append("job type")
+    return filled
 
 
 def _url_key(url):

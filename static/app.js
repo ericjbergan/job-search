@@ -111,7 +111,12 @@ function alsoFoundHtml(job) {
 }
 
 function shortDate(iso) {
-    return iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    if (!iso) return '';
+    // Plain dates ("2026-11-20", or midnight UTC as sites send posting dates) are calendar days,
+    // so show that day rather than converting to local time (which would show the day before).
+    const dateOnly = /^\d{4}-\d{2}-\d{2}(T00:00(:00(\.0+)?)?(Z|[+-]00:?00)?)?$/.test(iso);
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric',
+                                                         ...(dateOnly ? { timeZone: 'UTC' } : {}) });
 }
 
 function closesText(iso) {
@@ -258,8 +263,27 @@ async function withBusy(button, fn) {
     }
 }
 
+// --- collapsible sidebar cards ---------------------------------------------------------
+// Open/closed is remembered in this browser only (a viewing preference).
+
+function togglePanel(id, open) {
+    const panel = document.getElementById(id);
+    const collapse = open === undefined ? !panel.classList.contains('collapsed') : !open;
+    panel.classList.toggle('collapsed', collapse);
+    try { localStorage.setItem(`collapsed:${id}`, collapse ? '1' : ''); } catch (e) { /* private window */ }
+}
+
+function restorePanels() {
+    for (const id of ['jsearchPanel', 'companiesPanel']) {
+        let collapsed = false;
+        try { collapsed = localStorage.getItem(`collapsed:${id}`) === '1'; } catch (e) { /* ignore */ }
+        document.getElementById(id).classList.toggle('collapsed', collapsed);
+    }
+}
+
 // Editing a saved search reuses the search form: fill it in and swap the buttons.
 function editSearch(searchId) {
+    togglePanel('jsearchPanel', true);
     const s = state.searches.find(x => x.id === searchId);
     if (!s) return;
     document.getElementById('fEditId').value = s.id;
@@ -499,6 +523,7 @@ function filterByCompany(companyId) {
 }
 
 function showCompanyForm(company = null) {
+    togglePanel('companiesPanel', true);
     const defaults = state.companyDefaults || {};
     const ats = document.getElementById('cAts');
     ats.innerHTML = '<option value="">Auto-detect from URL</option>' + Object.entries(state.atsLabels)
@@ -746,6 +771,8 @@ function renderJobSummary(job) {
                 <div class="job-sub">${esc(job.company || 'Unknown company')}</div>
                 ${job.employment_type ? `<span class="badge">${esc(job.employment_type)}</span> ` : ''}
                 ${job.req_number ? `<span class="badge req" title="Requisition / posting number">Req ${esc(job.req_number)}</span> ` : ''}
+                ${job.added_by_hand ? '<span class="badge by-hand" title="Added from its listing link">Added by hand</span> ' : ''}
+                ${job.found_where ? `<span class="badge found" title="Where you found this job">Found: ${esc(job.found_where)}</span> ` : ''}
                 <span class="badge status-badge ${esc(job.status)}">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}${job.interest_level && (interested || applied) ? ' · ' + esc(INTEREST_LABELS[job.interest_level]) : ''}</span>
                 <div class="flag-buttons">
                     <button class="flag ${interested ? 'on interested' : ''}" onclick="toggleFlag(event, ${job.id}, 'interested', '${esc(job.status)}')">★ Interested</button>
@@ -792,6 +819,7 @@ async function openJob(jobId, closeOthers) {
                 </select>
             </label>
             ${apply ? `<a class="apply" href="${apply}" target="_blank" rel="noopener noreferrer">Go to listing ↗</a>` : ''}
+            ${apply ? `<button class="small secondary" onclick="reloadJob(${job.id}, this)" title="Read the listing page again to fill in the description and details">Reload from listing</button>` : ''}
         </div>
         <div class="notes-row">
             <label>Notes
@@ -799,6 +827,7 @@ async function openJob(jobId, closeOthers) {
             </label>
             <button class="small" onclick="updateJob(${job.id}, { notes: document.getElementById('notes-${job.id}').value })">Save notes</button>
         </div>
+        ${jobEditHtml(job)}
         ${jobBenefitsHtml(job)}
         <div class="description">${esc(job.description || 'No description provided.')}</div>
         <div class="detail-meta">
@@ -852,6 +881,7 @@ async function refreshAll() {
     await loadJobs();
 }
 
+restorePanels();
 refreshAll().catch(e => showMessage(e.message, true));
 
 
@@ -869,6 +899,92 @@ async function saveJobCompany(event, jobId) {
     } catch (e) {
         showMessage(e.message, true);
         button.disabled = false;
+    }
+}
+
+// --- job details she can add or correct ---------------------------------------------
+
+// Listing details (filled in from the site, editable) and her own application fields.
+// Listing fields are sent only when changed, so ones she hasn't touched keep updating from the site.
+const LISTING_FIELDS = ['req_number', 'pay', 'work_mode', 'location', 'posted_at'];
+const OWN_TEXT_FIELDS = ['resume_submitted', 'response_date', 'resume_link', 'listing_copy_location', 'callback_chances'];
+const OWN_CHECK_FIELDS = ['cover_letter', 'interviewed'];
+
+function jobEditHtml(job) {
+    const id = job.id, v = k => esc(job[k] || '');
+    const day = iso => esc((iso || '').slice(0, 10));
+    const payNow = job.salary_text || salaryText(job);
+    const edited = JSON.parse(job.edited_fields || '[]');
+    const mark = k => edited.includes(k) ? ' <span class="edited" title="You changed this; checks won’t overwrite it">edited</span>' : '';
+    const field = (k, label, input) => `<label>${label}${mark(k)} ${input}</label>`;
+    const initial = { req_number: job.req_number || '', pay: payNow || '', work_mode: job.work_mode || '',
+                      location: job.location || '', posted_at: (job.posted_at || '').slice(0, 10) };
+    return `
+        <div class="job-edit" data-initial="${esc(JSON.stringify(initial))}" id="edit-${id}">
+            <h4>Job details</h4>
+            <div class="edit-grid">
+                ${field('req_number', 'Reference Number', `<input id="e-req_number-${id}" maxlength="100" value="${v('req_number')}">`)}
+                ${field('posted_at', 'Date Posted', `<input type="date" id="e-posted_at-${id}" value="${day(job.posted_at)}">`)}
+                ${field('pay', 'Pay', `<input id="e-pay-${id}" maxlength="100" value="${esc(payNow || '')}" placeholder="e.g. $85,000 - $100,000">`)}
+                ${field('work_mode', 'Work Style', `<select id="e-work_mode-${id}">
+                    ${[['', 'Unknown'], ['remote', 'Remote'], ['hybrid', 'Hybrid'], ['onsite', 'On-site']].map(([val, label]) =>
+                        `<option value="${val}" ${(job.work_mode || '') === val ? 'selected' : ''}>${label}</option>`).join('')}
+                </select>`)}
+                ${field('location', 'Location', `<input id="e-location-${id}" maxlength="200" value="${v('location')}">`)}
+                <label>Resume Submitted <input type="date" id="e-resume_submitted-${id}" value="${day(job.resume_submitted)}"></label>
+                <label>Response to Resume <input type="date" id="e-response_date-${id}" value="${day(job.response_date)}"></label>
+                <div class="checks">
+                    <label class="check"><input type="checkbox" id="e-cover_letter-${id}" ${job.cover_letter ? 'checked' : ''}> Cover letter included</label>
+                    <label class="check"><input type="checkbox" id="e-interviewed-${id}" ${job.interviewed ? 'checked' : ''}> Interview</label>
+                </div>
+                <label class="wide">Resume Update page
+                    <span class="link-row"><input id="e-resume_link-${id}" value="${v('resume_link')}" placeholder="https://…">
+                    ${safeUrl(job.resume_link) ? `<a href="${safeUrl(job.resume_link)}" target="_blank" rel="noopener noreferrer">Open ↗</a>` : ''}</span></label>
+                <label class="wide">Job listing copy location <input id="e-listing_copy_location-${id}" maxlength="100" value="${v('listing_copy_location')}"></label>
+                <label class="wide">Chances of a call back &amp; why <textarea id="e-callback_chances-${id}" maxlength="250">${v('callback_chances')}</textarea></label>
+            </div>
+            <button class="small" onclick="saveJobDetails(${id})">Save details</button>
+        </div>`;
+}
+
+async function saveJobDetails(jobId) {
+    const el = name => document.getElementById(`e-${name}-${jobId}`);
+    const initial = JSON.parse(document.getElementById(`edit-${jobId}`).dataset.initial);
+    const body = {};
+    OWN_TEXT_FIELDS.forEach(n => { body[n] = el(n).value; });
+    OWN_CHECK_FIELDS.forEach(n => { body[n] = el(n).checked; });
+    LISTING_FIELDS.forEach(n => { if (el(n).value.trim() !== String(initial[n]).trim()) body[n] = el(n).value; });
+    try {
+        await api(`/api/jobs/${jobId}`, { method: 'PATCH', body });
+        await loadJobs();
+        await openJob(jobId, false);
+        showMessage('Job details saved.');
+    } catch (e) {
+        showMessage(e.message, true);
+    }
+}
+
+// Re-read one job's listing page (fills a missing description; edited fields stay as she set them).
+async function reloadJob(jobId, button) {
+    button.disabled = true;
+    button.textContent = 'Reloading…';
+    try {
+        const r = await api(`/api/jobs/${jobId}/reload`, { method: 'POST' });
+        await loadJobs();
+        await openJob(jobId, false);
+        const names = { description: 'description', location: 'location', is_remote: 'work style', employment_type: 'job type',
+                        posted_at: 'date posted', closes_at: 'closing date', salary_min: 'pay', salary_max: 'pay',
+                        salary_period: 'pay', salary_text: 'pay', req_number: 'reference number',
+                        work_mode: 'work style', work_mode_source: 'work style' };
+        const changed = [...new Set(r.changed.map(c => names[c] || c))];
+        const ai = (r.filled_by_chatgpt || []).filter(f => changed.includes(f));
+        showMessage(changed.length
+            ? `Updated from the listing: ${changed.join(', ')}.` + (ai.length ? ` (ChatGPT read ${ai.join(', ')} from the description.)` : '')
+            : 'The listing has nothing new for this job.');
+    } catch (e) {
+        showMessage(e.message, true);
+        button.disabled = false;
+        button.textContent = 'Reload from listing';
     }
 }
 
@@ -915,7 +1031,17 @@ async function previewJob(button) {
                 <label>Location <input id="ajLocation" value="${esc(p.location || '')}" placeholder="e.g. Columbus, OH"></label>
             </div>
             <div class="hint">${esc(facts)}${p.publisher ? ` · from ${esc(p.publisher)}` : ''}</div>
-            <div class="buttons"><button onclick="saveImportedJob(this)">Save job</button></div>`;
+            <label>Where did you find this job? (optional)
+                <input id="ajFound" maxlength="50" placeholder="e.g. LinkedIn alert, Indeed, friend's referral">
+            </label>
+            <div class="aj-interest">
+                <span>Interest level (optional):</span>
+                ${Object.entries(INTEREST_LABELS).map(([key, label]) =>
+                    `<label class="check"><input type="radio" name="ajInterest" value="${key}"> ${label}</label>`).join('')}
+                <label class="check"><input type="radio" name="ajInterest" value="" checked> Skip</label>
+            </div>
+            <div class="buttons"><button onclick="saveImportedJob(this)">Save job</button></div>
+            <div class="hint">It's saved as <strong>Interested</strong>.</div>`;
         box.classList.remove('hidden');
     } catch (e) {
         showMessage(e.message, true);
@@ -932,7 +1058,9 @@ async function saveImportedJob(button) {
     try {
         const r = await api('/api/jobs/import/save', { method: 'POST', body: { job: addJobState.job, edits: {
             title: document.getElementById('ajTitle').value, company: document.getElementById('ajCompany').value,
-            location: document.getElementById('ajLocation').value } } });
+            location: document.getElementById('ajLocation').value },
+            found_where: document.getElementById('ajFound').value,
+            interest_level: (document.querySelector('input[name="ajInterest"]:checked') || {}).value || null } });
         toggleAddJob(false);
         // Show it: clear filters that could hide it, then open the job.
         state.status = ''; state.searchId = null; state.companyId = null;

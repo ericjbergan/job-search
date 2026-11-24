@@ -281,18 +281,36 @@ def _job(id_, title, company, location=None, remote=False, posted=None, link=Non
 # A connector can attach job["_enrich"] = (function, args); check_company calls it only
 # for jobs that pass the title/location filters, so the extra requests stay few.
 
-def jsonld_details(job, url):
-    """Read the schema.org JobPosting block many careers pages embed (Radancy, Phenom, ...)."""
-    page = _request("GET", url, headers={"Accept": "text/html"}).text
+def jsonld_posting(page):
+    """The schema.org JobPosting data in a page, or None.
+
+    Some pages (Deloitte) carry more than one copy with different detail; the result
+    takes the longest description and fills any other missing fields from the rest.
+    """
+    items = []
     for block in re.findall(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.S):
         try:
             data = json.loads(block.strip())
         except ValueError:
             continue
-        for item in data if isinstance(data, list) else [data]:
-            if isinstance(item, dict) and item.get("@type") == "JobPosting":
-                _apply_jsonld(job, item)
-                return
+        candidates = data if isinstance(data, list) else data.get("@graph", [data]) if isinstance(data, dict) else []
+        items += [i for i in candidates if isinstance(i, dict) and i.get("@type") == "JobPosting"]
+    if not items:
+        return None
+    merged = {}
+    for item in sorted(items, key=lambda i: len(str(i.get("description") or "")), reverse=True):
+        for key, value in item.items():
+            if value not in (None, "", [], {}):
+                merged.setdefault(key, value)
+    return merged
+
+
+def jsonld_details(job, url):
+    """Read the schema.org JobPosting block many careers pages embed (Radancy, Phenom, ...)."""
+    page = _request("GET", url, headers={"Accept": "text/html"}).text
+    item = jsonld_posting(page)
+    if item:
+        _apply_jsonld(job, item)
 
 
 def _apply_jsonld(job, item):

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -102,6 +103,17 @@ CREATE TABLE IF NOT EXISTS jobs (
     status          TEXT NOT NULL DEFAULT 'new',
     applied_at      TEXT,
     interest_level  TEXT,
+    reference_number TEXT,
+    resume_submitted TEXT,
+    cover_letter    INTEGER,
+    resume_link     TEXT,
+    callback_chances TEXT,
+    response_date   TEXT,
+    interviewed     INTEGER,
+    listing_copy_location TEXT,
+    edited_fields   TEXT,
+    added_by_hand   INTEGER NOT NULL DEFAULT 0,
+    found_where     TEXT,
     also_found      TEXT,
     notes           TEXT,
     first_seen_at   TEXT NOT NULL,
@@ -135,7 +147,26 @@ CREATE TABLE IF NOT EXISTS api_calls (
 """
 
 # Columns the UI may change on a job; everything else comes from JSearch.
-EDITABLE_JOB_FIELDS = ("status", "notes", "interest_level")
+# Her own record for a job (all optional): column -> (kind, max length).
+APPLICATION_FIELDS = {
+    "resume_submitted": ("date", None),
+    "cover_letter": ("bool", None),
+    "resume_link": ("link", 500),
+    "callback_chances": ("text", 250),
+    "response_date": ("date", None),
+    "interviewed": ("bool", None),
+    "listing_copy_location": ("text", 100),
+}
+# Listing details she can correct. Once edited, a re-check or search won't overwrite them:
+# edit name -> the columns the listing would otherwise refresh.
+LISTING_EDITS = {
+    "req_number": ("req_number",),
+    "pay": ("salary_min", "salary_max", "salary_period", "salary_text"),
+    "work_mode": ("work_mode", "work_mode_source", "is_remote"),
+    "location": ("location",),
+    "posted_at": ("posted_at",),
+}
+EDITABLE_JOB_FIELDS = ("status", "notes", "interest_level", *APPLICATION_FIELDS)
 # How much she wants a job she's marked Interested or Applied.
 INTEREST_LEVELS = ("high", "medium", "low")
 
@@ -176,7 +207,11 @@ def _migrate(conn):
         "companies": (("priority", "INTEGER"), ("rating", "REAL")),
         "jobs": (("req_number", "TEXT"), ("closes_at", "TEXT"), ("applied_at", "TEXT"),
                  ("work_mode", "TEXT"), ("work_mode_source", "TEXT"), ("also_found", "TEXT"),
-                 ("interest_level", "TEXT")),
+                 ("interest_level", "TEXT"), ("added_by_hand", "INTEGER NOT NULL DEFAULT 0"),
+                 ("found_where", "TEXT"), ("reference_number", "TEXT"), ("resume_submitted", "TEXT"),
+                 ("cover_letter", "INTEGER"), ("resume_link", "TEXT"), ("callback_chances", "TEXT"),
+                 ("response_date", "TEXT"), ("interviewed", "INTEGER"), ("listing_copy_location", "TEXT"),
+                 ("edited_fields", "TEXT")),
     }
     for table, columns in added.items():
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -515,6 +550,8 @@ def _job_values(job):
     mode, mode_source = workmode.detect(
         listed=job.get("job_work_mode"), location=location, title=job.get("job_title"),
         description=job.get("job_description"), is_remote=job.get("job_is_remote"))
+    if not mode and job.get("job_work_mode_inferred") in workmode.MODES:
+        mode, mode_source = job["job_work_mode_inferred"], "description"
     return {
         "job_id": job["job_id"],
         "title": job.get("job_title") or "(untitled)",
@@ -619,18 +656,18 @@ def save_results(results, search_id=None, company_id=None):
                     continue
             if existing:
                 row_id = existing["id"]
-                conn.execute("""
-                    UPDATE jobs SET title=?, company=?, location=?, is_remote=?, employment_type=?,
-                        posted_at=?, salary_min=?, salary_max=?, salary_period=?, salary_text=?,
-                        req_number=?, closes_at=?, work_mode=?, work_mode_source=?,
-                        apply_link=?, publisher=?, description=?,
-                        raw_json=?, last_seen_at=?
-                    WHERE id=?
-                """, (v["title"], v["company"], v["location"], v["is_remote"], v["employment_type"],
-                      v["posted_at"], v["salary_min"], v["salary_max"], v["salary_period"],
-                      v["salary_text"], v["req_number"], v["closes_at"], v["work_mode"],
-                      v["work_mode_source"], v["apply_link"],
-                      v["publisher"], v["description"], v["raw_json"], ts, row_id))
+                refresh = {k: v[k] for k in (
+                    "title", "company", "location", "is_remote", "employment_type", "posted_at",
+                    "salary_min", "salary_max", "salary_period", "salary_text", "req_number", "closes_at",
+                    "work_mode", "work_mode_source", "apply_link", "publisher", "description", "raw_json")}
+                # Details she corrected by hand stay as she set them.
+                edited = conn.execute("SELECT edited_fields FROM jobs WHERE id = ?", (row_id,)).fetchone()["edited_fields"]
+                for name in json.loads(edited or "[]"):
+                    for col in LISTING_EDITS.get(name, ()):
+                        refresh.pop(col, None)
+                refresh["last_seen_at"] = ts
+                conn.execute(f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in refresh)} WHERE id = ?",
+                             (*refresh.values(), row_id))
                 if company_id is not None:
                     conn.execute("UPDATE jobs SET company_id = ? WHERE id = ?", (company_id, row_id))
                 seen_count += 1
@@ -675,6 +712,7 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     sql = ["SELECT j.id, j.company_id, j.title, j.company, j.location, j.is_remote, j.employment_type,",
            "j.posted_at, j.salary_min, j.salary_max, j.salary_period, j.salary_text,",
            "j.req_number, j.closes_at, j.applied_at, j.work_mode, j.work_mode_source, j.interest_level,",
+           "j.added_by_hand, j.found_where,",
            "j.apply_link, j.publisher, j.status, j.notes, j.first_seen_at, j.last_seen_at",
            "FROM jobs j"]
     where, args = [], []
@@ -714,6 +752,56 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     return [dict(r) for r in rows]
 
 
+def mark_added_by_hand(job_id, found_where=None, interest_level=None, is_new=True):
+    """A job she added from its listing link: set it to Interested (unless she's already moved it
+    past New), record where she found it and her interest level."""
+    if interest_level not in (None, *INTEREST_LEVELS):
+        raise ValueError(f"Unknown interest level: {interest_level}")
+    found_where = (found_where or "").strip()[:50] or None
+    with connect() as conn:
+        row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return
+        sets, args = [], []
+        if row["status"] == "new":
+            sets.append("status = 'interested'")
+        if interest_level:
+            sets.append("interest_level = ?")
+            args.append(interest_level)
+        if found_where:
+            sets.append("found_where = ?")
+            args.append(found_where)
+        if is_new:
+            sets.append("added_by_hand = 1")
+        if sets:
+            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", (*args, job_id))
+
+
+# Columns "Reload from listing" may fill in; title and company are left as they are.
+_RELOAD_COLUMNS = ("description", "location", "is_remote", "employment_type", "posted_at", "closes_at",
+                   "salary_min", "salary_max", "salary_period", "salary_text", "req_number",
+                   "work_mode", "work_mode_source")
+
+
+def refresh_job(job_id, fresh):
+    """Update one saved job from a fresh read of its listing. Only fills in what the listing
+    has (never blanks a field out), and skips anything she edited by hand. Returns the
+    names of the columns that changed."""
+    v = _job_values(fresh)
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return []
+        locked = {col for name in json.loads(row["edited_fields"] or "[]") for col in LISTING_EDITS.get(name, ())}
+        changes = {c: v[c] for c in _RELOAD_COLUMNS
+                   if c not in locked and v.get(c) not in (None, "") and v[c] != row[c]}
+        if changes:
+            changes["last_seen_at"] = now_iso()
+            conn.execute(f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in changes)} WHERE id = ?",
+                         (*changes.values(), job_id))
+    return [c for c in changes if c != "last_seen_at"]
+
+
 def find_job_id(source_job_id):
     """Row id for a job by its source id, following merged duplicates."""
     with connect() as conn:
@@ -732,8 +820,54 @@ def get_job(job_id):
     return job
 
 
+def _clean_value(name, kind, limit, value):
+    label = name.replace("_", " ")
+    if kind == "bool":
+        return None if value in (None, "") else int(bool(value) and str(value).lower() not in ("0", "false", "no"))
+    value = (str(value) if value is not None else "").strip()
+    if not value:
+        return None
+    if kind == "date":
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError(f"{label.capitalize()} must be a date (YYYY-MM-DD)")
+    elif kind == "link" and not re.match(r"https?://", value):
+        value = "https://" + value
+    if limit and len(value) > limit:
+        raise ValueError(f"{label.capitalize()} can be at most {limit} characters")
+    return value
+
+
+def _listing_edit_columns(name, value):
+    """Turn one listing-detail edit into column values."""
+    if name == "req_number":
+        return {"req_number": _clean_value("reference number", "text", 100, value)}
+    if name == "location":
+        return {"location": _clean_value("location", "text", 200, value)}
+    if name == "posted_at":
+        return {"posted_at": _clean_value("date posted", "date", None, value)}
+    if name == "work_mode":
+        mode = (value or "").strip().lower() or None
+        if mode in ("unknown", "none"):
+            mode = None
+        if mode not in (None, *workmode.MODES):
+            raise ValueError(f"Unknown work style: {value}")
+        return {"work_mode": mode, "work_mode_source": "manual" if mode else None, "is_remote": int(mode == "remote")}
+    if name == "pay":
+        text = _clean_value("pay", "text", 100, value)
+        found = pay.parse_pay(text) if text else None
+        return {"salary_min": found and found["min"], "salary_max": found and found["max"],
+                "salary_period": found and found["period"], "salary_text": text}
+    raise ValueError(name)
+
+
 def update_job(job_id, fields):
     updates = {k: fields[k] for k in EDITABLE_JOB_FIELDS if k in fields}
+    for name, (kind, limit) in APPLICATION_FIELDS.items():
+        if name in updates:
+            updates[name] = _clean_value(name, kind, limit, updates[name])
+    listing_edits = [k for k in LISTING_EDITS if k in fields]
+    for name in listing_edits:
+        updates.update(_listing_edit_columns(name, fields[name]))
     if "status" in updates and updates["status"] not in STATUSES:
         raise ValueError(f"Unknown status: {updates['status']}")
     if "interest_level" in updates:
@@ -748,9 +882,16 @@ def update_job(job_id, fields):
     with connect() as conn:
         # Remember when it was marked applied; un-marking (back to new/interested) clears it.
         if updates.get("status") == "applied":
-            current = conn.execute("SELECT applied_at FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            current = conn.execute("SELECT applied_at, resume_submitted FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if current and not current["applied_at"]:
                 updates["applied_at"] = now_iso()
+            # Marking Applied fills in Resume Submitted, unless she's already set it.
+            if current and not current["resume_submitted"] and "resume_submitted" not in updates:
+                updates["resume_submitted"] = datetime.now().strftime("%Y-%m-%d")
+        if listing_edits:
+            row = conn.execute("SELECT edited_fields FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            edited = set(json.loads((row and row["edited_fields"]) or "[]")) | set(listing_edits)
+            updates["edited_fields"] = json.dumps(sorted(edited))
         elif updates.get("status") in ("new", "interested"):
             updates["applied_at"] = None
         conn.execute(

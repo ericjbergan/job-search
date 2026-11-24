@@ -287,6 +287,31 @@ def api_list_jobs():
     return jsonify(jobs)
 
 
+@app.route("/api/jobs/<int:job_id>/reload", methods=["POST"])
+def api_reload_job(job_id):
+    """Re-read one job's listing page to fill in its description and details."""
+    job = db.get_job(job_id)
+    if not job:
+        return _error("Job not found", 404)
+    if not job.get("apply_link"):
+        return _error("This job has no listing link to reload from")
+    try:
+        fresh = importer.read_job(job["apply_link"])
+    except importer.ImportFailed as e:
+        return _error(str(e))
+    except Exception as e:
+        return _error(f"Couldn't read the listing: {e}", 502)
+    # The site's own data comes first; ChatGPT then reads the description for anything still missing.
+    if not fresh.get("job_description"):
+        fresh["job_description"] = job.get("description")
+    try:
+        by_ai = importer.fill_gaps(fresh)
+    except Exception:
+        by_ai = []  # ChatGPT unavailable: keep what the site gave
+    changed = db.refresh_job(job_id, fresh)
+    return jsonify({"changed": changed, "filled_by_chatgpt": by_ai, "job": db.get_job(job_id)})
+
+
 @app.route("/api/jobs/import/preview", methods=["POST"])
 def api_import_preview():
     """Read one job from its listing link (or pasted text) so she can check it before saving."""
@@ -313,6 +338,8 @@ def api_import_save():
     job = data.get("job") or {}
     if not job.get("job_id"):
         return _error("Nothing to save; read the listing first")
+    if (data.get("interest_level") or None) not in (None, *db.INTEREST_LEVELS):
+        return _error(f"Unknown interest level: {data['interest_level']}")
     edits = data.get("edits") or {}
     for field, key in (("title", "job_title"), ("company", "employer_name"), ("location", "job_location")):
         if (edits.get(field) or "").strip():
@@ -323,6 +350,8 @@ def api_import_save():
         company_id = next((c["id"] for c in db.list_companies() if benefits.company_key(c["name"]) == key), None)
     new, seen = db.save_results([job], company_id=company_id)
     saved = db.find_job_id(job["job_id"])
+    db.mark_added_by_hand(saved, found_where=data.get("found_where"),
+                          interest_level=data.get("interest_level") or None, is_new=bool(new))
     return jsonify({"id": saved, "new": bool(new), "merged": bool(seen)}), 201
 
 

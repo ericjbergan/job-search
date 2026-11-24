@@ -854,3 +854,154 @@ class ImportJobTests(FreshDbTest):
         again = self.client.post("/api/jobs/import/save", json={"job": body["job"]}).get_json()
         self.assertEqual(again["id"], saved["id"])
         self.assertEqual(len(db.list_jobs()), 1)
+
+
+class AddJobFollowUpTests(FreshDbTest):
+    def job(self, job_id="url:x.example/1"):
+        return {"job_id": job_id, "job_title": "Business Analyst", "employer_name": "Acme",
+                "job_location": "Columbus, OH", "job_apply_link": "https://x.example/1", "job_publisher": "X"}
+
+    def test_saved_as_interested_with_level_and_where_found(self):
+        r = self.client.post("/api/jobs/import/save", json={"job": self.job(), "interest_level": "high",
+                                                           "found_where": "LinkedIn alert " + "x" * 60}).get_json()
+        j = next(x for x in self.client.get("/api/jobs").get_json() if x["id"] == r["id"])
+        self.assertEqual((j["status"], j["interest_level"], j["added_by_hand"]), ("interested", "high", 1))
+        self.assertEqual(len(j["found_where"]), 50)
+        self.assertTrue(j["found_where"].startswith("LinkedIn alert"))
+
+    def test_interest_can_be_skipped(self):
+        r = self.client.post("/api/jobs/import/save", json={"job": self.job(), "interest_level": None}).get_json()
+        j = db.get_job(r["id"])
+        self.assertEqual((j["status"], j["interest_level"], j["found_where"]), ("interested", None, None))
+
+    def test_existing_job_keeps_its_status(self):
+        db.save_results([{**self.job("linkedin:9"), "job_publisher": "LinkedIn"}])
+        jid = db.list_jobs()[0]["id"]
+        db.update_job(jid, {"status": "applied"})
+        r = self.client.post("/api/jobs/import/save", json={"job": self.job(), "found_where": "Careers page"}).get_json()
+        self.assertEqual(r["id"], jid)
+        j = db.get_job(jid)
+        self.assertEqual((j["status"], j["found_where"], j["added_by_hand"]), ("applied", "Careers page", 0))
+
+    def test_bad_interest_level(self):
+        self.assertEqual(self.client.post("/api/jobs/import/save", json={"job": self.job(), "interest_level": "urgent"}).status_code, 400)
+        self.assertEqual(db.list_jobs(), [])  # nothing saved when the input is bad
+
+
+class EditJobDetailsTests(FreshDbTest):
+    SITE = {"job_id": "wd:1", "job_title": "Business Analyst", "employer_name": "Acme", "job_req_id": "R-77",
+            "job_location": "Columbus, OH", "job_posted_at_datetime_utc": "2026-11-01T00:00:00+00:00",
+            "job_description": "Pay range $70,000 - $80,000 annually. This is a hybrid role."}
+
+    def setUp(self):
+        super().setUp()
+        db.save_results([self.SITE])
+        self.jid = db.list_jobs()[0]["id"]
+
+    def patch(self, **body):
+        return self.client.patch(f"/api/jobs/{self.jid}", json=body)
+
+    def test_her_fields_save_and_validate(self):
+        r = self.patch(req_number="SRC-12", resume_submitted="2026-11-20", cover_letter=True,
+                       resume_link="careers.acme.example/me", callback_chances="Good fit", response_date="",
+                       interviewed=False, listing_copy_location="OneDrive/Job Hunt/Acme.pdf")
+        j = r.get_json()
+        self.assertEqual((j["req_number"], j["resume_submitted"], j["cover_letter"], j["interviewed"], j["response_date"]),
+                         ("SRC-12", "2026-11-20", 1, 0, None))
+        self.assertEqual(j["resume_link"], "https://careers.acme.example/me")
+        self.assertEqual(self.patch(resume_submitted="11/20/2026").status_code, 400)
+        self.assertEqual(self.patch(callback_chances="x" * 251).status_code, 400)
+        self.assertEqual(self.patch(work_mode="sometimes").status_code, 400)
+
+    def test_listing_edits_survive_recheck_others_refresh(self):
+        j = self.patch(pay="$90k - $100k", work_mode="remote", req_number="R-78").get_json()
+        self.assertEqual((j["salary_min"], j["salary_max"], j["salary_period"]), (90000, 100000, "YEAR"))
+        self.assertEqual((j["work_mode"], j["work_mode_source"], j["is_remote"]), ("remote", "manual", 1))
+        self.assertEqual(json.loads(j["edited_fields"]), ["pay", "req_number", "work_mode"])
+        # The site changes its listing; her edits stay, untouched fields follow the site.
+        db.save_results([{**self.SITE, "job_req_id": "R-99", "job_location": "Dublin, OH",
+                          "job_posted_at_datetime_utc": "2026-11-15T00:00:00+00:00"}])
+        j = db.get_job(self.jid)
+        self.assertEqual((j["req_number"], j["salary_min"], j["work_mode"]), ("R-78", 90000, "remote"))
+        self.assertEqual((j["location"], j["posted_at"][:10]), ("Dublin, OH", "2026-11-15"))
+
+    def test_clearing_pay_and_unknown_work_style(self):
+        j = self.patch(pay="", work_mode="").get_json()
+        self.assertEqual((j["salary_min"], j["salary_text"], j["work_mode"], j["is_remote"]), (None, None, None, 0))
+
+    def test_applied_fills_resume_date_but_keeps_hers(self):
+        self.patch(status="applied")
+        self.assertRegex(db.get_job(self.jid)["resume_submitted"], r"^\d{4}-\d{2}-\d{2}$")
+        self.patch(resume_submitted="2026-10-01", status="interested")
+        self.patch(status="applied")
+        self.assertEqual(db.get_job(self.jid)["resume_submitted"], "2026-10-01")
+
+
+class ReloadJobTests(FreshDbTest):
+    def test_reload_fills_missing_and_keeps_edits(self):
+        db.save_results([{"job_id": "avature:x:1", "job_title": "Business Analyst", "employer_name": "Deloitte",
+                          "job_location": "Multiple Locations", "job_apply_link": "https://apply.example/JobDetail/BA/1"}])
+        jid = db.list_jobs()[0]["id"]
+        db.update_job(jid, {"location": "Columbus, OH"})   # she corrected the location
+        fresh = {"job_id": "url:apply.example/JobDetail/BA/1", "job_title": "BA (long internal title)", "employer_name": "Deloitte",
+                 "job_location": "Philadelphia, PA", "job_description": "Full description. 401(k) with 5% match.",
+                 "job_posted_at_datetime_utc": "2026-10-27"}
+        with mock.patch("jobsearch.importer.read_job", return_value=fresh):
+            r = self.client.post(f"/api/jobs/{jid}/reload").get_json()
+        self.assertEqual(sorted(r["changed"]), ["description", "posted_at"])
+        j = db.get_job(jid)
+        self.assertEqual((j["title"], j["location"]), ("Business Analyst", "Columbus, OH"))  # title kept, edit kept
+        self.assertIn("Full description", j["description"])
+
+    def test_reload_never_blanks_fields(self):
+        db.save_results([{"job_id": "a", "job_title": "BA", "employer_name": "Acme", "job_apply_link": "https://a.example/1",
+                          "job_description": "Existing text"}])
+        jid = db.list_jobs()[0]["id"]
+        self.assertEqual(db.refresh_job(jid, {"job_id": "x", "job_title": "BA", "employer_name": "Acme"}), [])
+        self.assertEqual(db.get_job(jid)["description"], "Existing text")
+
+    def test_jsonld_takes_longest_description(self):
+        page = ('<script type="application/ld+json">{"@type": "JobPosting", "title": "BA", "description": "short"}</script>'
+                '<script type="application/ld+json">{"@type": "JobPosting", "datePosted": "2026-10-27", '
+                '"description": "' + "a much longer description " * 20 + '"}</script>')
+        item = boards.jsonld_posting(page)
+        self.assertTrue(item["description"].startswith("a much longer"))
+        self.assertEqual((item["title"], item["datePosted"]), ("BA", "2026-10-27"))
+
+
+class FillGapsTests(unittest.TestCase):
+    TEXT = ("We are hiring a Business Analyst to join our Dublin, OH team. This is a hybrid role with three days "
+            "in the office. Compensation: $85,000 - $100,000 per year plus bonus. Requisition R-4521. " * 3)
+
+    def run_fill(self, job, answer):
+        from jobsearch import importer
+        fake = mock.MagicMock()
+        fake.chat.completions.create.return_value.choices = [mock.MagicMock(message=mock.MagicMock(content=json.dumps(answer)))]
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), mock.patch.object(importer.benefits, "_client", return_value=fake):
+            return importer.fill_gaps(job)
+
+    def test_fills_only_missing_and_checked_values(self):
+        job = {"job_title": "Business Analyst", "job_location": "Multiple Locations", "job_description": self.TEXT,
+               "job_posted_at_datetime_utc": "2026-11-01"}
+        answer = {"pay": "$85,000 - $100,000 per year", "work_style": "hybrid", "location": "Dublin, OH",
+                  "req_number": "R-4521", "posted_date": "2026-10-01", "closing_date": None, "employment_type": "Full time"}
+        filled = self.run_fill(job, answer)
+        self.assertEqual(sorted(filled), ["job type", "location", "pay", "reference number", "work style"])
+        self.assertEqual(job["job_posted_at_datetime_utc"], "2026-11-01")   # site's own value kept
+        v = db._job_values({**job, "job_id": "x", "employer_name": "Acme"})
+        self.assertEqual((v["salary_min"], v["salary_max"], v["work_mode"], v["work_mode_source"], v["location"]),
+                         (85000, 100000, "hybrid", "description", "Dublin, OH"))
+
+    def test_invented_values_are_rejected(self):
+        job = {"job_title": "BA", "job_location": "", "job_description": self.TEXT}
+        answer = {"pay": "$120,000 - $140,000", "work_style": "remote", "location": "Seattle, WA", "req_number": "X-999"}
+        self.assertEqual(self.run_fill(job, answer), [])
+
+    def test_remote_is_not_a_location(self):
+        job = {"job_title": "BA", "job_location": None, "job_description": self.TEXT + " Fully remote."}
+        filled = self.run_fill(job, {"location": "Remote", "work_style": "remote"})
+        self.assertNotIn("location", filled)
+        self.assertIsNone(job["job_location"])
+
+    def test_skips_jobs_already_read_by_chatgpt(self):
+        self.assertEqual(self.run_fill({"job_description": self.TEXT, "job_read_by_ai": True}, {"pay": "$85,000"}), [])
