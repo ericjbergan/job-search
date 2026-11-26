@@ -7,8 +7,8 @@ venv/
 # Credentials
 .env
 
-# SQLite: jobs.db is tracked on purpose (the Back up button commits it);
-# ignore journals and any stray copies.
+# SQLite databases hold her own job-search records; the repo is public, so never commit them.
+*.db
 *.db-journal
 *.db-wal
 *.db-shm

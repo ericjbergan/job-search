@@ -7,7 +7,7 @@ A small Flask app for running job searches on demand and tracking the results in
 - **Starter data:** a brand-new database is loaded once from `seed/seed.json` — 56 Columbus-area companies (priority, Glassdoor rating, notes) and two saved Business Analyst searches.
 - **Benefits:** each job shows the benefits its posting mentions (401(k) match, PTO days, pension, bonus, tuition, parental leave...). A **Benefits** panel — from any job, even if its company isn't saved, or from the company list — holds Retirement / Sick & PTO / Commute / Bonus scores on the spreadsheet's 1-4 scales plus notes. **Look up benefits** (needs `OPENAI_API_KEY`) follows "benefits" links from the listing and careers site and has ChatGPT pull out facts, keeping each one's quote and source; quotes are checked against the page. When no page can be found it uses ChatGPT web search instead (marked "verify"). Suggested scores never overwrite the ones you've entered.
 - **Tracking:** every job gets a status (new, interested, applied, interviewing, offer, rejected, not a fit) and notes. Re-running a search never overwrites them.
-- **Back up** commits `jobs.db` and pushes it to GitHub.
+- **Back up** saves a dated copy of `jobs.db` (`jobs-YYYY-MM-DD.db`, one per day) to a **Job Search backups** folder in OneDrive, which syncs it off the computer. Set `BACKUP_DIR` in `.env` to use a different folder. The database is never pushed to GitHub: the repo is public.
 
 ## Setup (Windows)
 

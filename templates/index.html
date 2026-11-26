@@ -164,6 +164,19 @@
                 <ul id="companyList" class="saved-list"></ul>
                 </div>
             </section>
+
+            <section class="panel collapsible" id="skillsPanel">
+                <div class="panel-head">
+                    <h2 class="collapse-toggle" onclick="togglePanel('skillsPanel')" title="Show or hide">
+                        <span class="chev">▾</span> Skills &amp; certifications</h2>
+                </div>
+                <div class="panel-body">
+                    <p class="hint">What listings ask for, across all saved jobs (Not a fit included). Click one to see those jobs.</p>
+                    <button type="button" class="small" id="skillsAnalyzeBtn" onclick="analyzeSkills(this)">Analyze listings</button>
+                    <div id="skillsStatus" class="hint"></div>
+                    <div id="skillsTables"></div>
+                </div>
+            </section>
         </aside>
 
         <main>

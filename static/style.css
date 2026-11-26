@@ -348,3 +348,17 @@ aside { position: sticky; top: 0; max-height: 100vh; overflow-y: auto; padding-b
 @media (max-width: 860px) {
     aside { position: static; max-height: none; overflow: visible; }
 }
+
+/* Skills & certifications card */
+.skills-heading { font-size: 13px; margin: 14px 0 6px; color: #1f3a5f; text-transform: uppercase; letter-spacing: 0.03em; }
+.skill-list { list-style: none; margin: 0; padding: 0; }
+.skill-row { display: grid; grid-template-columns: 1fr 70px 36px; grid-template-rows: auto auto; column-gap: 8px;
+             align-items: center; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
+.skill-row:hover { background: #f0f4fb; }
+.skill-row.active { background: #e3edfb; outline: 1px solid #9bb8e6; }
+.skill-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.skill-bar { height: 8px; background: #edf0f4; border-radius: 4px; overflow: hidden; }
+.skill-bar span { display: block; height: 100%; background: #0072C8; border-radius: 4px; }
+.skill-pct { font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+.skill-split { grid-column: 1 / -1; font-size: 11px; color: #888; }
+#skillsAnalyzeBtn { margin: 6px 0 2px; }

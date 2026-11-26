@@ -277,7 +277,7 @@ function togglePanel(id, open) {
 }
 
 function restorePanels() {
-    for (const id of ['jsearchPanel', 'companiesPanel']) {
+    for (const id of ['jsearchPanel', 'companiesPanel', 'skillsPanel']) {
         let collapsed = false;
         try { collapsed = localStorage.getItem(`collapsed:${id}`) === '1'; } catch (e) { /* ignore */ }
         document.getElementById(id).classList.toggle('collapsed', collapsed);
@@ -402,6 +402,7 @@ function resetJobFilters() {
     state.status = '';
     state.searchId = null;
     state.companyId = null;
+    state.skill = null;
     document.getElementById('textFilter').value = '';
     document.getElementById('workModeFilter').value = '';
     document.getElementById('interestFilter').value = '';
@@ -413,6 +414,8 @@ function resetJobFilters() {
 function filterBySearch(searchId) {
     state.searchId = state.searchId === searchId ? null : searchId;
     state.companyId = null;
+    state.skill = null;
+    renderSkills();
     loadSearches();
     loadCompanies();
     loadJobs();
@@ -520,6 +523,8 @@ function renderCompanies() {
 function filterByCompany(companyId) {
     state.companyId = state.companyId === companyId ? null : companyId;
     state.searchId = null;
+    state.skill = null;
+    renderSkills();
     loadSearches();
     loadCompanies();
     loadJobs();
@@ -728,6 +733,7 @@ async function loadJobs() {
     if (state.status) params.append('status', state.status);
     if (state.searchId) params.append('search_id', state.searchId);
     if (state.companyId) params.append('company_id', state.companyId);
+    if (state.skill) params.append('skill', state.skill.key);
     const text = document.getElementById('textFilter').value.trim();
     if (text) params.append('q', text);
     const workMode = document.getElementById('workModeFilter').value;
@@ -747,6 +753,10 @@ async function loadJobs() {
     } else if (company) {
         chip.textContent = `Company: ${company.name} ✕`;
         chip.onclick = () => filterByCompany(company.id);
+        chip.classList.remove('hidden');
+    } else if (state.skill) {
+        chip.textContent = `Asks for: ${state.skill.name} ✕`;
+        chip.onclick = () => filterBySkill(state.skill.key);
         chip.classList.remove('hidden');
     } else {
         chip.classList.add('hidden');
@@ -862,7 +872,7 @@ async function backup() {
     button.textContent = 'Backing up...';
     try {
         const result = await api('/api/backup', { method: 'POST' });
-        showMessage(result.committed ? 'Backed up to GitHub.' : 'No changes since the last backup; GitHub is up to date.');
+        showMessage(`Backed up to OneDrive: ${result.path}`);
     } catch (e) {
         showMessage(e.message, true);
     } finally {
@@ -876,6 +886,97 @@ async function refreshAll() {
     await loadSearches();
     await loadCompanies();
     await loadJobs();
+    await loadSkills();
+}
+
+// --- skills & certifications ---------------------------------------------------------
+// ChatGPT reads each listing once for the certifications and tools it asks for; this shows
+// how often each comes up across every saved job, so she can see what training pays off.
+
+async function loadSkills() {
+    state.skillsSummary = await api('/api/skills');
+    renderSkills();
+}
+
+function renderSkills() {
+    const s = state.skillsSummary;
+    if (!s) return;
+    const btn = document.getElementById('skillsAnalyzeBtn');
+    if (!btn.dataset.busy) {
+        btn.disabled = s.unread === 0;
+        btn.textContent = s.unread ? `Analyze ${s.unread} listing${s.unread === 1 ? '' : 's'}` : 'All listings analyzed';
+    }
+    const noText = s.no_description
+        ? ` ${s.no_description} job${s.no_description === 1 ? ' has' : 's have'} no description yet (Reload from listing can fill it in).` : '';
+    document.getElementById('skillsStatus').textContent = s.read
+        ? `Based on ${s.read} of ${s.total_jobs} jobs.${noText}`
+        : `No listings analyzed yet.${noText}`;
+    document.getElementById('skillsTables').innerHTML =
+        skillTable('Certifications', s.certs, 'certs') + skillTable('Tools & software', s.tools, 'tools');
+}
+
+function skillTable(title, items, id) {
+    if (!items.length) return state.skillsSummary.read ? `<h3 class="skills-heading">${title}</h3><p class="hint">None found.</p>` : '';
+    const showAll = state.skillsShowAll && state.skillsShowAll[id];
+    const shown = showAll ? items : items.slice(0, 12);
+    const rows = shown.map(g => {
+        const split = ['required', 'preferred', 'mentioned'].filter(n => g[n]).map(n => `${g[n]} ${n}`).join(' · ');
+        const active = state.skill && state.skill.key === g.key;
+        return `<li class="skill-row ${active ? 'active' : ''}" title="${esc(split)} — click to see these jobs"
+                    data-key="${esc(g.key)}" data-name="${esc(g.name)}" onclick="filterBySkill(this.dataset.key, this.dataset.name)">
+            <span class="skill-name">${esc(g.name)}</span>
+            <span class="skill-bar"><span style="width:${Math.max(2, g.pct)}%"></span></span>
+            <span class="skill-pct">${g.pct}%</span>
+            <span class="skill-split">${g.jobs} job${g.jobs === 1 ? '' : 's'}${g.required ? ` · ${g.required} req` : ''}${g.preferred ? ` · ${g.preferred} pref` : ''}</span>
+        </li>`;
+    }).join('');
+    const more = items.length > 12
+        ? `<a class="small-link" onclick="toggleSkillsAll('${id}')">${showAll ? 'Show fewer' : `Show all ${items.length}`}</a>` : '';
+    return `<h3 class="skills-heading">${title}</h3><ul class="skill-list">${rows}</ul>${more}`;
+}
+
+function toggleSkillsAll(id) {
+    state.skillsShowAll = { ...(state.skillsShowAll || {}), [id]: !(state.skillsShowAll || {})[id] };
+    renderSkills();
+}
+
+function filterBySkill(key, name) {
+    state.skill = state.skill && state.skill.key === key ? null : { key, name };
+    state.searchId = null;
+    state.companyId = null;
+    if (state.skill) {
+        // Show every job that asks for it, Not a fit included (the counts include them).
+        state.status = '';
+        document.getElementById('hideNotFit').checked = false;
+    }
+    renderSkills();
+    loadSearches();
+    loadCompanies();
+    loadMeta().then(loadJobs).then(scrollToResults);
+}
+
+// Reads listings in small batches so the button can show progress.
+async function analyzeSkills(button) {
+    button.dataset.busy = '1';
+    button.disabled = true;
+    let read = 0;
+    try {
+        while (true) {
+            button.textContent = `Reading listings… ${read} done`;
+            const r = await api('/api/skills/analyze', { method: 'POST', body: { limit: 8 } });
+            read += r.read;
+            state.skillsSummary = r.summary;
+            renderSkills();
+            if (r.errors.length) showMessage(`Some listings couldn't be read (they'll be tried again): ${r.errors[0]}`, true);
+            if (!r.remaining || !r.read) break;
+        }
+        showMessage(`Analyzed ${read} listing${read === 1 ? '' : 's'}.`);
+    } catch (e) {
+        showMessage(e.message, true);
+    } finally {
+        delete button.dataset.busy;
+        renderSkills();
+    }
 }
 
 restorePanels();

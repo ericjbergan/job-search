@@ -1,7 +1,6 @@
 """Job Search web UI: run JSearch queries on demand and track the results."""
 
 import os
-import subprocess
 from datetime import date
 
 from dotenv import load_dotenv
@@ -10,7 +9,7 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import ai, benefits, boards, db, geo, importer, jobhunt, jsearch
+from jobsearch import ai, benefits, boards, db, geo, importer, jobhunt, jsearch, skills
 from jobsearch.pay import format_pay
 
 app = Flask(__name__)
@@ -282,6 +281,7 @@ def api_list_jobs():
         sort=request.args.get("sort") or "found",
         work_mode=request.args.get("work_mode") or None,
         interest=request.args.get("interest") or None,
+        skill=request.args.get("skill") or None,
     )
     # Flag jobs whose employer is already a saved company (by name, so job-board results count too).
     saved = {benefits.company_key(c["name"]): c["id"] for c in db.list_companies()}
@@ -313,6 +313,24 @@ def api_reload_job(job_id):
         by_ai = []  # ChatGPT unavailable: keep what the site gave
     changed = db.refresh_job(job_id, fresh)
     return jsonify({"changed": changed, "filled_by_chatgpt": by_ai, "job": db.get_job(job_id)})
+
+
+@app.route("/api/skills")
+def api_skills():
+    """How often each certification and tool shows up across all saved jobs."""
+    return jsonify(db.skills_summary())
+
+
+@app.route("/api/skills/analyze", methods=["POST"])
+def api_skills_analyze():
+    """Read a batch of not-yet-read listings for certifications and tools (the page calls this
+    repeatedly until nothing is left, showing progress)."""
+    limit = max(1, min(int((request.get_json(silent=True) or {}).get("limit") or 8), 20))
+    try:
+        result = skills.analyze(limit=limit)
+    except ai.AIError as e:
+        return _error(str(e))
+    return jsonify({**result, "summary": db.skills_summary()})
 
 
 @app.route("/api/jobs/import/spreadsheet", methods=["POST"])
@@ -489,30 +507,31 @@ def api_update_job(job_id):
 
 # --- backup -----------------------------------------------------------------
 
-def _git(*args):
-    return subprocess.run(["git", *args], cwd=db.REPO_DIR, capture_output=True, text=True, timeout=120)
+def backup_folder():
+    """Where Back up saves copies: BACKUP_DIR from .env, else "Job Search backups" in her OneDrive
+    (never GitHub: the repo is public and the database holds her own records)."""
+    custom = (os.getenv("BACKUP_DIR") or "").strip()
+    if custom:
+        return custom
+    onedrive = os.getenv("OneDrive") or os.getenv("OneDriveConsumer") or os.getenv("OneDriveCommercial")
+    return os.path.join(onedrive, "Job Search backups") if onedrive else None
 
 
 @app.route("/api/backup", methods=["POST"])
 def api_backup():
-    """Commit jobs.db and push it to GitHub."""
-    rel_path = os.path.relpath(db.db_path(), db.REPO_DIR)
-    if rel_path.startswith(".."):
-        return _error("Database is outside the repo folder; nothing to back up")
-
-    _git("add", rel_path)
-    if _git("diff", "--cached", "--quiet", "--", rel_path).returncode == 0:
-        committed = False
-    else:
-        commit = _git("commit", "-m", f"Back up job search data ({date.today().isoformat()})", "--", rel_path)
-        if commit.returncode != 0:
-            return _error(f"git commit failed: {commit.stderr or commit.stdout}", 500)
-        committed = True
-
-    push = _git("push")
-    if push.returncode != 0:
-        return _error(f"git push failed: {push.stderr or push.stdout}", 500)
-    return jsonify({"ok": True, "committed": committed})
+    """Save a dated copy of the database to OneDrive (one file per day; a second backup the
+    same day replaces that day's copy). OneDrive then syncs it off the computer."""
+    folder = backup_folder()
+    if not folder:
+        return _error("OneDrive isn't set up on this computer. Add BACKUP_DIR=<folder> to .env "
+                      "to choose where backups go.")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        target = os.path.join(folder, f"jobs-{date.today().isoformat()}.db")
+        db.backup_to(target)
+    except OSError as e:
+        return _error(f"Couldn't save the backup: {e}", 500)
+    return jsonify({"ok": True, "path": target, "folder": folder})
 
 
 if __name__ == "__main__":

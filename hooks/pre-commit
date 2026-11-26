@@ -1,0 +1,37 @@
+#!/bin/sh
+# Blocks commits that would publish private data. The GitHub repo is public.
+# Installed by setup.bat (git config core.hooksPath hooks).
+#   - databases (jobs.db, demo.db, ...) hold Jen's job-search records
+#   - .env holds API keys; the comparison report and spreadsheets hold her job data
+#   - any API key value, whether from .env or one that looks like a key
+
+status=0
+
+bad_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -Ei '(\.db|\.sqlite3?|\.db-journal|\.db-wal|\.db-shm|\.xlsx|\.xls|\.csv)$|(^|/)\.env$|(^|/)ai-comparison\.html$')
+if [ -n "$bad_files" ]; then
+    echo "pre-commit: these files hold private data and can't go in the public repo:" >&2
+    echo "$bad_files" | sed 's/^/    /' >&2
+    echo "  Unstage them with: git restore --staged <file>" >&2
+    status=1
+fi
+
+added=$(git diff --cached -U0 --no-color | grep '^+' | grep -v '^+++')
+
+# Key values actually in .env (anything ending in _KEY or _TOKEN, 12+ characters).
+if [ -f .env ]; then
+    for value in $(grep -E '^[A-Z0-9_]+(_KEY|_TOKEN)=' .env | cut -d= -f2- | tr -d '"'"'"'\r'); do
+        if [ ${#value} -ge 12 ] && printf '%s\n' "$added" | grep -qF -- "$value"; then
+            echo "pre-commit: a staged change contains an API key from .env. Remove it before committing." >&2
+            status=1
+            break
+        fi
+    done
+fi
+
+# Anything shaped like an OpenAI / Anthropic key.
+if printf '%s\n' "$added" | grep -qE 'sk-(ant|proj|svcacct)-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9]{40,}'; then
+    echo "pre-commit: a staged change looks like it contains an API key (sk-...). Remove it before committing." >&2
+    status=1
+fi
+
+exit $status

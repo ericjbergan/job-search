@@ -144,33 +144,39 @@ if __name__ == "__main__":
     unittest.main()
 
 
-@unittest.skipUnless(shutil.which("git"), "git not installed")
-class BackupTests(unittest.TestCase):
-    """Back up commits jobs.db and pushes it, using a throwaway local remote."""
+class BackupTests(FreshDbTest):
+    """Back up saves a dated copy of the database to OneDrive (never GitHub: the repo is public)."""
 
-    def test_backup_commits_and_pushes(self):
+    def test_backup_copies_database_to_onedrive(self):
+        db.save_results(sample_results()[:2])
+        with tempfile.TemporaryDirectory() as onedrive:
+            with mock.patch.dict(os.environ, {"OneDrive": onedrive, "BACKUP_DIR": ""}):
+                first = self.client.post("/api/backup").get_json()
+                again = self.client.post("/api/backup").get_json()   # same day: replaces that day's copy
+            folder = os.path.join(onedrive, "Job Search backups")
+            self.assertTrue(first["ok"])
+            self.assertEqual(os.path.dirname(first["path"]), folder)
+            self.assertEqual(first["path"], again["path"])
+            self.assertEqual(len(os.listdir(folder)), 1)
+            copy = sqlite3.connect(first["path"])
+            try:
+                self.assertEqual(copy.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 2)
+            finally:
+                copy.close()
+
+    def test_backup_dir_setting_wins(self):
         with tempfile.TemporaryDirectory() as tmp:
-            remote, clone = os.path.join(tmp, "remote.git"), os.path.join(tmp, "clone")
-            run = lambda *a, cwd=tmp: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)
-            run("init", "--bare", "-b", "main", remote)
-            run("clone", remote, clone)
-            run("config", "user.email", "test@example.com", cwd=clone)
-            run("config", "user.name", "Test", cwd=clone)
-            run("commit", "--allow-empty", "-m", "init", cwd=clone)
-            run("push", "-u", "origin", "main", cwd=clone)
+            target = os.path.join(tmp, "mine")
+            with mock.patch.dict(os.environ, {"BACKUP_DIR": target, "OneDrive": tmp}):
+                r = self.client.post("/api/backup").get_json()
+            self.assertEqual(os.path.dirname(r["path"]), target)
 
-            db_file = os.path.join(clone, "jobs.db")
-            with mock.patch.object(db, "REPO_DIR", clone), mock.patch.dict(os.environ, {"JOBSEARCH_DB": db_file}):
-                db.init_db(seed_path=None)
-                db.save_results(sample_results()[:2])
-                client = app_module.app.test_client()
-                first = client.post("/api/backup").get_json()
-                second = client.post("/api/backup").get_json()
-
-            self.assertEqual(first, {"ok": True, "committed": True})
-            self.assertEqual(second, {"ok": True, "committed": False})
-            log = subprocess.run(["git", "log", "--oneline", "main"], cwd=remote, capture_output=True, text=True).stdout
-            self.assertIn("Back up job search data", log)
+    def test_no_onedrive_is_a_clear_error(self):
+        env = {k: "" for k in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial", "BACKUP_DIR")}
+        with mock.patch.dict(os.environ, env):
+            r = self.client.post("/api/backup")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("BACKUP_DIR", r.get_json()["error"])
 
 
 class SeedAndDetectTests(FreshDbTest):
@@ -1161,3 +1167,76 @@ class AIProviderTests(unittest.TestCase):
         self.assertEqual(data["facts"][0]["source_url"], "https://acme.com/b")
         self.assertEqual(data["figures"], {"pto_days": 20})
 
+
+
+class SkillsTests(FreshDbTest):
+    """Certifications and tools read from listings (the AI is faked)."""
+
+    ANSWERS = {
+        "one": {"certs": [{"name": "CBAP certification", "need": "preferred"}],
+                "tools": [{"name": "Microsoft Power BI", "need": "required"}, {"name": "Jira", "need": "nice"}]},
+        "two": {"certs": [{"name": "Certified Business Analysis Professional", "need": "required"}],
+                "tools": [{"name": "PowerBI", "need": "preferred"}, {"name": "SQL", "need": "required"}]},
+        "three": {"certs": [], "tools": [{"name": "Excel", "need": "required"}]},
+    }
+
+    def fake_answer(self, instructions, text):
+        word = text.split()[0]
+        return json.dumps(self.ANSWERS[word])
+
+    def add_jobs(self):
+        jobs = [board_job(i, f"Analyst {word}") for i, word in enumerate(self.ANSWERS)]
+        for j, word in zip(jobs, self.ANSWERS):
+            j["job_description"] = f"{word} " + "We need a business analyst. " * 12
+        jobs.append(board_job(9, "No text job"))  # description too short to read
+        db.save_results(jobs)
+        return {j["title"]: j["id"] for j in db.list_jobs()}
+
+    def analyze(self):
+        from jobsearch import skills
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test", "AI_LISTINGS": "openai"}), \
+                mock.patch.object(skills.ai, "json_answer", side_effect=self.fake_answer) as fake:
+            r = self.client.post("/api/skills/analyze", json={"limit": 20}).get_json()
+        return r, fake.call_count
+
+    def test_names_are_grouped_and_need_is_cleaned(self):
+        from jobsearch import skills
+        items = skills.clean({"certs": [{"name": "CBAP certification", "need": "Preferred"}, "junk"],
+                              "tools": [{"name": "Microsoft Power BI", "need": "preferred"},
+                                        {"name": "Power BI", "need": "required"}, {"name": "Tableau"}]})
+        by_name = {i["name"]: i["need"] for i in items}
+        self.assertEqual(by_name, {"CBAP": "preferred", "Power BI": "required", "Tableau": "mentioned"})
+
+    def test_counts_across_all_jobs_and_filter(self):
+        ids = self.add_jobs()
+        self.client.patch(f"/api/jobs/{ids['Analyst three']}", json={"status": "not_a_fit"})
+        r, calls = self.analyze()
+        self.assertEqual((r["read"], r["remaining"], calls), (3, 0, 3))
+        s = r["summary"]
+        self.assertEqual((s["total_jobs"], s["read"], s["no_description"], s["unread"]), (4, 3, 1, 0))
+        tools = {g["name"]: g for g in s["tools"]}
+        self.assertEqual((tools["Power BI"]["jobs"], tools["Power BI"]["pct"]), (2, 67))
+        self.assertEqual((tools["Power BI"]["required"], tools["Power BI"]["preferred"]), (1, 1))
+        self.assertEqual(tools["Excel"]["jobs"], 1)                # from the Not a fit job
+        self.assertEqual(tools["Jira"]["mentioned"], 1)
+        self.assertEqual([(g["name"], g["jobs"]) for g in s["certs"]], [("CBAP", 2)])
+        shown = self.client.get("/api/jobs?skill=powerbi").get_json()
+        self.assertEqual(sorted(j["title"] for j in shown), ["Analyst one", "Analyst two"])
+
+    def test_listings_are_read_once_until_the_description_changes(self):
+        ids = self.add_jobs()
+        self.analyze()
+        r, calls = self.analyze()
+        self.assertEqual((r["read"], calls), (0, 0))
+        with db.connect() as conn:
+            conn.execute("UPDATE jobs SET description = ? WHERE id = ?",
+                         ("three " + "Now Excel and more. " * 15, ids["Analyst three"]))
+        r, calls = self.analyze()
+        self.assertEqual((r["read"], calls), (1, 1))
+
+    def test_needs_the_listings_key(self):
+        self.add_jobs()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": ""}):
+            r = self.client.post("/api/skills/analyze", json={})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("OPENAI_API_KEY", r.get_json()["error"])

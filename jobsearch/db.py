@@ -1,5 +1,6 @@
 """SQLite storage for saved searches, jobs, and API usage."""
 
+import hashlib
 import json
 import os
 import re
@@ -137,6 +138,17 @@ CREATE TABLE IF NOT EXISTS search_jobs (
     PRIMARY KEY (search_id, job_id)
 );
 
+-- Certifications and tools a listing asks for (read by AI; see skills.py).
+-- skill_key groups spellings ("PowerBI", "Microsoft Power BI" -> "power bi").
+CREATE TABLE IF NOT EXISTS job_skills (
+    job_id          INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    kind            TEXT NOT NULL,          -- 'cert' or 'tool'
+    skill_key       TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    need            TEXT NOT NULL,          -- 'required', 'preferred' or 'mentioned'
+    PRIMARY KEY (job_id, kind, skill_key)
+);
+
 -- One row per JSearch call, so the UI can show usage against the free quota.
 CREATE TABLE IF NOT EXISTS api_calls (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,6 +203,17 @@ def connect():
         conn.close()
 
 
+def backup_to(target):
+    """Copy the whole database to `target` safely, even while the app is using it."""
+    src = sqlite3.connect(db_path())
+    dst = sqlite3.connect(target)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+
+
 def init_db(seed_path=SEED_PATH):
     with connect() as conn:
         conn.executescript(SCHEMA)
@@ -211,7 +234,7 @@ def _migrate(conn):
                  ("found_where", "TEXT"), ("reference_number", "TEXT"), ("resume_submitted", "TEXT"),
                  ("cover_letter", "INTEGER"), ("resume_link", "TEXT"), ("callback_chances", "TEXT"),
                  ("response_date", "TEXT"), ("interviewed", "INTEGER"), ("listing_copy_location", "TEXT"),
-                 ("edited_fields", "TEXT")),
+                 ("edited_fields", "TEXT"), ("skills_read_hash", "TEXT")),
     }
     for table, columns in added.items():
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -708,7 +731,7 @@ JOB_SORTS = {
 
 
 def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_only=False,
-              hide_not_fit=False, sort="found", work_mode=None, interest=None):
+              hide_not_fit=False, sort="found", work_mode=None, interest=None, skill=None):
     sql = ["SELECT j.id, j.company_id, j.title, j.company, j.location, j.is_remote, j.employment_type,",
            "j.posted_at, j.salary_min, j.salary_max, j.salary_period, j.salary_text,",
            "j.req_number, j.closes_at, j.applied_at, j.work_mode, j.work_mode_source, j.interest_level,",
@@ -740,6 +763,9 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
         args.append(interest)
     if hide_not_fit and status != "not_a_fit":
         where.append("j.status != 'not_a_fit'")
+    if skill:
+        where.append("EXISTS (SELECT 1 FROM job_skills s WHERE s.job_id = j.id AND s.skill_key = ?)")
+        args.append(skill)
     if text:
         where.append("(j.title LIKE ? OR j.company LIKE ? OR j.description LIKE ? OR j.notes LIKE ?"
                      " OR j.req_number LIKE ?)")
@@ -750,6 +776,62 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     with connect() as conn:
         rows = conn.execute(" ".join(sql), args).fetchall()
     return [dict(r) for r in rows]
+
+
+def jobs_needing_skills(min_chars=200):
+    """Jobs with a description the skills reader hasn't read yet (or whose description changed
+    since). -> [(job id, description, hash of the description)]"""
+    with connect() as conn:
+        rows = conn.execute("SELECT id, description, skills_read_hash FROM jobs WHERE length(description) >= ?",
+                            (min_chars,)).fetchall()
+    out = []
+    for r in rows:
+        h = hashlib.sha1(r["description"].encode("utf-8")).hexdigest()[:16]
+        if r["skills_read_hash"] != h:
+            out.append((r["id"], r["description"], h))
+    return out
+
+
+def save_job_skills(job_id, desc_hash, items):
+    """Replace a job's skills. items: [{"kind", "key", "name", "need"}] (already cleaned up)."""
+    with connect() as conn:
+        conn.execute("DELETE FROM job_skills WHERE job_id = ?", (job_id,))
+        for it in items:
+            conn.execute("INSERT OR REPLACE INTO job_skills (job_id, kind, skill_key, name, need) VALUES (?, ?, ?, ?, ?)",
+                         (job_id, it["kind"], it["key"], it["name"], it["need"]))
+        conn.execute("UPDATE jobs SET skills_read_hash = ? WHERE id = ?", (desc_hash, job_id))
+
+
+def skills_summary(min_chars=200):
+    """How often each certification and tool shows up, across every saved job (Not a fit included).
+
+    Percentages are out of the jobs whose listings have been read."""
+    with connect() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        read = conn.execute("SELECT COUNT(*) FROM jobs WHERE skills_read_hash IS NOT NULL").fetchone()[0]
+        no_text = conn.execute("SELECT COUNT(*) FROM jobs WHERE description IS NULL OR length(description) < ?",
+                               (min_chars,)).fetchone()[0]
+        rows = conn.execute(
+            "SELECT s.kind, s.skill_key, s.name, s.need FROM job_skills s JOIN jobs j ON j.id = s.job_id "
+            "WHERE j.skills_read_hash IS NOT NULL").fetchall()
+    groups = {}
+    for r in rows:
+        g = groups.setdefault((r["kind"], r["skill_key"]), {
+            "kind": r["kind"], "key": r["skill_key"], "names": {}, "jobs": 0,
+            "required": 0, "preferred": 0, "mentioned": 0})
+        g["names"][r["name"]] = g["names"].get(r["name"], 0) + 1
+        g["jobs"] += 1
+        g[r["need"]] = g.get(r["need"], 0) + 1
+    items = []
+    for g in groups.values():
+        g["name"] = max(g.pop("names").items(), key=lambda kv: kv[1])[0]  # the most common spelling
+        g["pct"] = round(100 * g["jobs"] / read) if read else 0
+        items.append(g)
+    items.sort(key=lambda g: (-g["jobs"], g["name"].lower()))
+    return {"total_jobs": total, "read": read, "no_description": no_text,
+            "unread": len(jobs_needing_skills(min_chars)),
+            "certs": [g for g in items if g["kind"] == "cert"],
+            "tools": [g for g in items if g["kind"] == "tool"]}
 
 
 def mark_added_by_hand(job_id, found_where=None, interest_level=None, is_new=True):
