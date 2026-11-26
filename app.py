@@ -466,15 +466,27 @@ def api_import_preview():
     v = db._job_values(job)
     pay = (format_pay(v["salary_min"], v["salary_max"], v["salary_period"])
            if v["salary_min"] or v["salary_max"] else v["salary_text"])
-    return jsonify({"job": job, "preview": {k: v[k] for k in (
+    return jsonify({"job": job, "duplicates": _duplicates(job), "preview": {k: v[k] for k in (
         "title", "company", "location", "work_mode", "employment_type", "req_number",
         "posted_at", "closes_at", "publisher", "apply_link")} | {"salary_text": pay, "description_chars": len(v["description"] or "")}})
+
+
+def _duplicates(job):
+    """Saved jobs this one looks like: {"blocking": [...], "rejected": [...]}. A copy of a Rejected
+    job may be a relisting she wants to apply to again; a copy of anything else is a duplicate."""
+    matches = db.find_existing(job)
+    return {"blocking": [m for m in matches if m["status"] != "rejected"],
+            "rejected": [m for m in matches if m["status"] == "rejected"]}
 
 
 @app.route("/api/jobs/import/save", methods=["POST"])
 def api_import_save():
     """Save a previewed job, with any title/company/location corrections she made.
-    Jobs added by hand skip the title and distance filters: she chose this one."""
+    Jobs added by hand skip the title and distance filters: she chose this one.
+
+    A job she already has (any status but Rejected) isn't saved again (409). A copy of a Rejected
+    job is saved only when she confirms it's a relisting ("save_relisted": true), as a separate
+    New job so the rejected one keeps its history."""
     data = request.get_json() or {}
     job = data.get("job") or {}
     if not job.get("job_id"):
@@ -485,15 +497,33 @@ def api_import_save():
     for field, key in (("title", "job_title"), ("company", "employer_name"), ("location", "job_location")):
         if (edits.get(field) or "").strip():
             job[key] = edits[field].strip()
+    dups = _duplicates(job)
+    if dups["blocking"]:
+        d = dups["blocking"][0]
+        status = STATUS_NAMES.get(d["status"], d["status"])
+        return jsonify({"error": f"Not saved: this job is already in your list as “{d['title']}” at "
+                                 f"{d['company'] or 'the same company'} ({status}).",
+                        "duplicate": d}), 409
+    relisted = bool(dups["rejected"])
+    if relisted and not data.get("save_relisted"):
+        return jsonify({"error": "This looks like a job you were rejected for. Confirm to save it as a new job.",
+                        "needs_confirm": True, "rejected": dups["rejected"]}), 409
+    if relisted:
+        # A separate card: its own id, so it isn't merged back into the rejected one.
+        job["job_id"] = f"{job['job_id']}#relisted-{db.now_iso()}"
     company_id = job.pop("company_id", None)
     if company_id is None and job.get("employer_name"):
         key = benefits.company_key(job["employer_name"])
         company_id = next((c["id"] for c in db.list_companies() if benefits.company_key(c["name"]) == key), None)
-    new, seen = db.save_results([job], company_id=company_id)
+    new, seen = db.save_results([job], company_id=company_id, force_new=relisted)
     saved = db.find_job_id(job["job_id"])
     db.mark_added_by_hand(saved, found_where=data.get("found_where"),
                           interest_level=data.get("interest_level") or None, is_new=bool(new))
-    return jsonify({"id": saved, "new": bool(new), "merged": bool(seen)}), 201
+    return jsonify({"id": saved, "new": bool(new), "merged": bool(seen), "relisted": relisted}), 201
+
+
+STATUS_NAMES = {"new": "New", "interested": "Interested", "applied": "Applied", "interviewing": "Interviewing",
+                "offer": "Offer", "rejected": "Rejected", "not_a_fit": "Not a fit"}
 
 
 @app.route("/api/jobs/<int:job_id>/save_company", methods=["POST"])

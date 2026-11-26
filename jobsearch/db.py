@@ -650,6 +650,36 @@ def _find_duplicate(index, v):
     return None
 
 
+def find_existing(job):
+    """Saved jobs that look like the same job as `job` (a listing about to be added by hand):
+    the same listing, one already merged into a saved job, the same company + title + place,
+    or the same company + reference number. -> [{id, title, company, location, status, ...}]"""
+    v = _job_values(job)
+    ids = []
+    with connect() as conn:
+        same = conn.execute("SELECT id FROM jobs WHERE job_id = ?", (v["job_id"],)).fetchone()
+        alias = conn.execute("SELECT job_id FROM job_aliases WHERE alias_job_id = ?", (v["job_id"],)).fetchone()
+        ids += [r for r in ((same and same["id"]), (alias and alias["job_id"])) if r]
+        key = (benefits_mod.company_key(v["company"] or ""), boards.norm(v["title"]))
+        for r in _dedupe_index(conn).get(key, []):
+            if r["req_number"] and v["req_number"] and boards.norm(r["req_number"]) != boards.norm(v["req_number"]):
+                continue
+            if _same_place(r["location"], v["location"]):
+                ids.append(r["id"])
+        if v["req_number"] and key[0]:
+            for r in conn.execute("SELECT id, company, req_number FROM jobs WHERE req_number IS NOT NULL").fetchall():
+                if (benefits_mod.company_key(r["company"] or "") == key[0]
+                        and boards.norm(r["req_number"]) == boards.norm(v["req_number"])):
+                    ids.append(r["id"])
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            return []
+        rows = conn.execute(
+            f"SELECT id, title, company, location, status, applied_at, response_date, first_seen_at, req_number "
+            f"FROM jobs WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _add_source(conn, row_id, publisher, link):
     """Remember another site the job is listed on ("Also on ZipRecruiter")."""
     row = conn.execute("SELECT publisher, apply_link, also_found FROM jobs WHERE id = ?", (row_id,)).fetchone()
@@ -664,13 +694,13 @@ def _add_source(conn, row_id, publisher, link):
     conn.execute("UPDATE jobs SET also_found = ? WHERE id = ?", (json.dumps(sources), row_id))
 
 
-def save_results(results, search_id=None, company_id=None):
+def save_results(results, search_id=None, company_id=None, force_new=False):
     """Insert new jobs and refresh existing ones. Returns (new_count, seen_count).
 
     Status and notes on existing jobs are never touched, so re-running a
     search can't undo your tracking. A job already saved from another site
     (same company, title and location) is merged into that card instead of
-    becoming a second one.
+    becoming a second one, unless force_new (a relisted job she chose to save again).
     """
     new_count = seen_count = 0
     ts = now_iso()
@@ -683,7 +713,7 @@ def save_results(results, search_id=None, company_id=None):
             if company_id is not None:
                 v["company_id"] = company_id
             existing = conn.execute("SELECT id FROM jobs WHERE job_id = ?", (v["job_id"],)).fetchone()
-            if not existing:
+            if not existing and not force_new:
                 alias = conn.execute("SELECT job_id FROM job_aliases WHERE alias_job_id = ?", (v["job_id"],)).fetchone()
                 dup_id = alias["job_id"] if alias else _find_duplicate(index, v)
                 if dup_id:
@@ -787,8 +817,9 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     elif interest in INTEREST_LEVELS:
         where.append("j.interest_level = ?")
         args.append(interest)
-    if hide_not_fit and status != "not_a_fit":
-        where.append("j.status != 'not_a_fit'")
+    # "Hide not a fit & rejected" (on by default); picking one of those tabs still shows its jobs.
+    if hide_not_fit and status not in ("not_a_fit", "rejected"):
+        where.append("j.status NOT IN ('not_a_fit', 'rejected')")
     if skill:
         where.append("EXISTS (SELECT 1 FROM job_skills s WHERE s.job_id = j.id AND s.skill_key = ?)")
         args.append(skill)
@@ -939,8 +970,8 @@ def skills_summary(min_chars=200):
 
 
 def mark_added_by_hand(job_id, found_where=None, interest_level=None, is_new=True):
-    """A job she added from its listing link: set it to Interested (unless she's already moved it
-    past New), record where she found it and her interest level."""
+    """A job she added from its listing link: it stays New (like any other new job), and we record
+    where she found it and her interest level (shown once she marks it Interested or Applied)."""
     if interest_level not in (None, *INTEREST_LEVELS):
         raise ValueError(f"Unknown interest level: {interest_level}")
     found_where = (found_where or "").strip()[:50] or None
@@ -949,8 +980,6 @@ def mark_added_by_hand(job_id, found_where=None, interest_level=None, is_new=Tru
         if not row:
             return
         sets, args = [], []
-        if row["status"] == "new":
-            sets.append("status = 'interested'")
         if interest_level:
             sets.append("interest_level = ?")
             args.append(interest_level)

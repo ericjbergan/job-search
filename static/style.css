@@ -427,3 +427,9 @@ button.add-btn.small-add { font-size: 12px; padding: 4px 12px; margin-left: 6px;
 #profilePanel .rank-weights { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px 10px; margin-bottom: 8px; }
 #profilePanel .rank-weights label { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin: 0; }
 #profilePanel .rank-weights input { width: 52px; padding: 2px 4px; }
+
+/* Duplicate warning when adding a job */
+.dup-note { border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; line-height: 1.6; }
+.dup-note.block { background: #fdecea; border: 1px solid #f1b0a8; color: #7a1f16; }
+.dup-note.relist { background: #fff4e0; border: 1px solid #f3cf8f; color: #6b3d00; }
+.dup-note .badge { font-size: 11px; }

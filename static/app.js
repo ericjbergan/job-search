@@ -49,7 +49,12 @@ async function api(path, options = {}) {
     }
     const response = await fetch(path, opts);
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+    if (!response.ok) {
+        const err = new Error(data.error || `Request failed (${response.status})`);
+        err.status = response.status;
+        err.data = data;  // e.g. which job a duplicate matches
+        throw err;
+    }
     return data;
 }
 
@@ -1560,10 +1565,19 @@ async function previewJob(button) {
     if (!url && !text) return showMessage('Paste the link to the job listing.', true);
     button.disabled = true;
     button.textContent = 'Reading…';
+    // Clear the last preview, so a listing that fails to load never shows the previous job's details.
+    addJobState.job = null;
+    addJobState.dups = null;
+    const previous = document.getElementById('ajPreview');
+    previous.innerHTML = '';
+    previous.classList.add('hidden');
+    document.getElementById('message').classList.add('hidden');
     try {
         const r = await api('/api/jobs/import/preview', { method: 'POST', body: { url, text } });
         addJobState.job = r.job;
+        addJobState.dups = r.duplicates || { blocking: [], rejected: [] };
         const p = r.preview;
+        const blocked = addJobState.dups.blocking.length > 0, relisted = !blocked && addJobState.dups.rejected.length > 0;
         const facts = [
             p.work_mode ? (WORK_MODE_LABELS[p.work_mode] || p.work_mode) : 'Work style not stated',
             p.employment_type, p.salary_text, p.req_number ? `Req ${p.req_number}` : '',
@@ -1571,6 +1585,7 @@ async function previewJob(button) {
         ].filter(Boolean).join(' · ');
         const box = document.getElementById('ajPreview');
         box.innerHTML = `
+            ${duplicateNote(addJobState.dups)}
             <h3>Check the details, then save</h3>
             <label>Job title <input id="ajTitle" value="${esc(p.title || '')}"></label>
             <div class="row">
@@ -1587,8 +1602,9 @@ async function previewJob(button) {
                     `<label class="check"><input type="radio" name="ajInterest" value="${key}"> ${label}</label>`).join('')}
                 <label class="check"><input type="radio" name="ajInterest" value="" checked> Skip</label>
             </div>
-            <div class="buttons"><button onclick="saveImportedJob(this)">Save job</button></div>
-            <div class="hint">It's saved as <strong>Interested</strong>.</div>`;
+            <div class="buttons"><button onclick="saveImportedJob(this)" ${blocked ? 'disabled title="Already in your list"' : ''}>${
+                relisted ? 'Save as a new job' : 'Save job'}</button></div>
+            <div class="hint">${blocked ? 'Not saved: it is already in your list.' : "It's saved as <strong>New</strong>."}</div>`;
         box.classList.remove('hidden');
     } catch (e) {
         showMessage(e.message, true);
@@ -1601,26 +1617,78 @@ async function previewJob(button) {
 
 async function saveImportedJob(button) {
     if (!addJobState.job) return;
+    const dups = addJobState.dups || { blocking: [], rejected: [] };
+    // A copy of a job she was rejected for: ask before saving it again.
+    let relist = false;
+    if (!dups.blocking.length && dups.rejected.length) {
+        if (!confirm(relistQuestion(dups.rejected[0]))) return;
+        relist = true;
+    }
     button.disabled = true;
+    const body = { job: addJobState.job, save_relisted: relist, edits: {
+        title: document.getElementById('ajTitle').value, company: document.getElementById('ajCompany').value,
+        location: document.getElementById('ajLocation').value },
+        found_where: document.getElementById('ajFound').value,
+        interest_level: (document.querySelector('input[name="ajInterest"]:checked') || {}).value || null };
     try {
-        const r = await api('/api/jobs/import/save', { method: 'POST', body: { job: addJobState.job, edits: {
-            title: document.getElementById('ajTitle').value, company: document.getElementById('ajCompany').value,
-            location: document.getElementById('ajLocation').value },
-            found_where: document.getElementById('ajFound').value,
-            interest_level: (document.querySelector('input[name="ajInterest"]:checked') || {}).value || null } });
-        toggleAddJob(false);
-        // Show it: clear filters that could hide it, then open the job.
-        state.status = ''; state.searchId = null; state.companyId = null;
-        document.getElementById('textFilter').value = '';
-        await refreshAll();
-        showMessage(r.merged ? 'That job was already saved; this listing was added to it.' : 'Job added.');
-        if (r.id && document.getElementById(`job-${r.id}`)) {
-            await openJob(r.id, true);
-            document.getElementById(`job-${r.id}`).scrollIntoView({ behavior: 'smooth', block: 'center' });
+        let r;
+        try {
+            r = await api('/api/jobs/import/save', { method: 'POST', body });
+        } catch (e) {
+            // Her edits to the title/company/location can make it match a job only at save time.
+            if (e.status === 409 && e.data && e.data.needs_confirm && confirm(relistQuestion(e.data.rejected[0]))) {
+                r = await api('/api/jobs/import/save', { method: 'POST', body: { ...body, save_relisted: true } });
+            } else if (e.status === 409 && e.data && e.data.duplicate) {
+                addJobState.dups = { blocking: [e.data.duplicate], rejected: [] };
+                document.getElementById('ajPreview').insertAdjacentHTML('afterbegin', duplicateNote(addJobState.dups));
+                throw e;
+            } else {
+                throw e;
+            }
         }
+        toggleAddJob(false);
+        await showExistingJob(r.id);
+        showMessage(r.relisted ? 'Saved as a new job; the rejected one is unchanged.' : 'Job added.');
     } catch (e) {
         showMessage(e.message, true);
-        button.disabled = false;
+        button.disabled = !!(addJobState.dups && addJobState.dups.blocking.length);
+    }
+}
+
+function relistQuestion(old) {
+    const when = old.response_date || old.applied_at || old.first_seen_at;
+    return `You were rejected for “${old.title}” at ${old.company || 'this company'}`
+        + (when ? ` (${shortDate(when)})` : '') + '.\n\nCompanies sometimes relist a job, and you can apply again. '
+        + 'Save this as a new job? The rejected one stays as it is.';
+}
+
+// The warning at the top of the add-job preview when the job is already saved.
+function duplicateNote(dups) {
+    const line = d => `“${esc(d.title)}” at ${esc(d.company || 'the same company')}`
+        + ` <span class="badge status-badge ${esc(d.status)}">${esc(STATUS_LABELS[d.status] || d.status)}</span>`
+        + ` <a class="small-link" onclick="showExistingJob(${d.id})">Show it</a>`;
+    if (dups.blocking.length) {
+        return `<div class="dup-note block"><b>Already in your list</b>, so it won't be saved again:
+            ${dups.blocking.map(line).join('<br>')}</div>`;
+    }
+    if (dups.rejected.length) {
+        return `<div class="dup-note relist"><b>You were rejected for this job before:</b> ${dups.rejected.map(line).join('<br>')}
+            <br>Companies sometimes relist a job. You can still save it as a new job (you'll be asked to confirm).</div>`;
+    }
+    return '';
+}
+
+// Show one job in the list: clear filters that could hide it, then open it.
+async function showExistingJob(jobId) {
+    state.status = ''; state.searchId = null; state.companyId = null; state.skill = null;
+    document.getElementById('textFilter').value = '';
+    document.getElementById('noDescFilter').checked = false;
+    const job = await api(`/api/jobs/${jobId}`);
+    if (['rejected', 'not_a_fit'].includes(job.status)) document.getElementById('hideNotFit').checked = false;
+    await refreshAll();
+    if (document.getElementById(`job-${jobId}`)) {
+        await openJob(jobId, true);
+        document.getElementById(`job-${jobId}`).scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 }
 

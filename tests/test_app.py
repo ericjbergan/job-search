@@ -852,10 +852,65 @@ class ImportJobTests(FreshDbTest):
         saved = self.client.post("/api/jobs/import/save", json={"job": body["job"], "edits": {"title": "Sr. Business Analyst"}}).get_json()
         job = db.get_job(saved["id"])
         self.assertEqual((job["title"], job["company_id"], saved["new"]), ("Sr. Business Analyst", cid, True))
-        # Saving the same listing again merges instead of duplicating.
-        again = self.client.post("/api/jobs/import/save", json={"job": body["job"]}).get_json()
-        self.assertEqual(again["id"], saved["id"])
+        # Adding the same listing again is refused, and nothing new is saved.
+        again = self.client.post("/api/jobs/import/save", json={"job": body["job"]})
+        self.assertEqual(again.status_code, 409)
+        self.assertEqual(again.get_json()["duplicate"]["id"], saved["id"])
         self.assertEqual(len(db.list_jobs()), 1)
+
+
+class AddJobDuplicateTests(FreshDbTest):
+    """Adding a job she already has: refused, unless the earlier one was Rejected and she confirms."""
+
+    def job(self, job_id="url:x.example/1", title="Business Analyst", req=None, location="Columbus, OH"):
+        return {"job_id": job_id, "job_title": title, "employer_name": "Acme", "job_location": location,
+                "job_apply_link": f"https://{job_id[4:]}", "job_publisher": "X", "job_req_id": req}
+
+    def add(self, job, **extra):
+        return self.client.post("/api/jobs/import/save", json={"job": job, **extra})
+
+    def preview_dups(self, job):
+        from jobsearch import importer
+        with mock.patch.object(importer, "read_job", return_value=job):
+            return self.client.post("/api/jobs/import/preview", json={"url": job["job_apply_link"]}).get_json()["duplicates"]
+
+    def test_same_job_on_another_site_is_refused(self):
+        first = self.add(self.job()).get_json()
+        self.client.patch(f"/api/jobs/{first['id']}", json={"status": "interested"})
+        other_site = self.job("url:y.example/9")
+        dups = self.preview_dups(other_site)
+        self.assertEqual(([d["id"] for d in dups["blocking"]], dups["rejected"]), ([first["id"]], []))
+        r = self.add(other_site)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("Interested", r.get_json()["error"])
+        self.assertEqual(len(db.list_jobs()), 1)
+
+    def test_same_reference_number_with_reworded_title_is_refused(self):
+        self.add(self.job(req="R-100"))
+        r = self.add(self.job("url:y.example/2", title="Sr. Business Analyst (Hybrid)", req="R-100"))
+        self.assertEqual(r.status_code, 409)
+
+    def test_different_opening_is_not_a_duplicate(self):
+        self.add(self.job(req="R-100"))
+        self.assertEqual(self.add(self.job("url:y.example/2", req="R-200")).status_code, 201)
+        self.assertEqual(len(db.list_jobs()), 2)
+
+    def test_copy_of_a_rejected_job_needs_confirming_then_is_a_new_job(self):
+        old = self.add(self.job()).get_json()["id"]
+        self.client.patch(f"/api/jobs/{old}", json={"status": "rejected", "notes": "Rejected in October"})
+        dups = self.preview_dups(self.job())
+        self.assertEqual((dups["blocking"], [d["id"] for d in dups["rejected"]]), ([], [old]))
+        r = self.add(self.job())
+        self.assertEqual((r.status_code, r.get_json()["needs_confirm"]), (409, True))
+        self.assertEqual(len(db.list_jobs()), 1)
+        r = self.add(self.job(), save_relisted=True)
+        self.assertEqual(r.status_code, 201)
+        new = r.get_json()["id"]
+        self.assertNotEqual(new, old)
+        self.assertEqual(db.get_job(new)["status"], "new")
+        self.assertEqual((db.get_job(old)["status"], db.get_job(old)["notes"]), ("rejected", "Rejected in October"))
+        # Now there's an open copy, so a third attempt is a plain duplicate.
+        self.assertIn("duplicate", self.add(self.job(), save_relisted=True).get_json())
 
 
 class AddJobFollowUpTests(FreshDbTest):
@@ -863,27 +918,31 @@ class AddJobFollowUpTests(FreshDbTest):
         return {"job_id": job_id, "job_title": "Business Analyst", "employer_name": "Acme",
                 "job_location": "Columbus, OH", "job_apply_link": "https://x.example/1", "job_publisher": "X"}
 
-    def test_saved_as_interested_with_level_and_where_found(self):
+    def test_saved_as_new_with_level_and_where_found(self):
         r = self.client.post("/api/jobs/import/save", json={"job": self.job(), "interest_level": "high",
                                                            "found_where": "LinkedIn alert " + "x" * 60}).get_json()
         j = next(x for x in self.client.get("/api/jobs").get_json() if x["id"] == r["id"])
-        self.assertEqual((j["status"], j["interest_level"], j["added_by_hand"]), ("interested", "high", 1))
+        self.assertEqual((j["status"], j["interest_level"], j["added_by_hand"]), ("new", "high", 1))
+        # Marking it Interested later keeps the level she picked when adding it.
+        self.client.patch(f"/api/jobs/{r['id']}", json={"status": "interested"})
+        self.assertEqual(db.get_job(r["id"])["interest_level"], "high")
         self.assertEqual(len(j["found_where"]), 50)
         self.assertTrue(j["found_where"].startswith("LinkedIn alert"))
 
     def test_interest_can_be_skipped(self):
         r = self.client.post("/api/jobs/import/save", json={"job": self.job(), "interest_level": None}).get_json()
         j = db.get_job(r["id"])
-        self.assertEqual((j["status"], j["interest_level"], j["found_where"]), ("interested", None, None))
+        self.assertEqual((j["status"], j["interest_level"], j["found_where"]), ("new", None, None))
 
-    def test_existing_job_keeps_its_status(self):
+    def test_job_already_applied_to_is_refused_and_left_alone(self):
         db.save_results([{**self.job("linkedin:9"), "job_publisher": "LinkedIn"}])
         jid = db.list_jobs()[0]["id"]
         db.update_job(jid, {"status": "applied"})
-        r = self.client.post("/api/jobs/import/save", json={"job": self.job(), "found_where": "Careers page"}).get_json()
-        self.assertEqual(r["id"], jid)
+        r = self.client.post("/api/jobs/import/save", json={"job": self.job(), "found_where": "Careers page"})
+        self.assertEqual((r.status_code, r.get_json()["duplicate"]["id"]), (409, jid))
         j = db.get_job(jid)
-        self.assertEqual((j["status"], j["found_where"], j["added_by_hand"]), ("applied", "Careers page", 0))
+        self.assertEqual((j["status"], j["found_where"], j["added_by_hand"]), ("applied", None, 0))
+        self.assertEqual(len(db.list_jobs()), 1)
 
     def test_bad_interest_level(self):
         self.assertEqual(self.client.post("/api/jobs/import/save", json={"job": self.job(), "interest_level": "urgent"}).status_code, 400)
@@ -1333,6 +1392,12 @@ class RankingTests(FreshDbTest):
         self.assertEqual(remote["overall"], 1)
         ordered = self.client.get("/api/jobs?sort=rank").get_json()
         self.assertEqual(ordered[0]["title"], "BA remote")
+        # "Hide not a fit & rejected" leaves both out; their own tabs still show them.
+        shown = {j["title"] for j in self.client.get("/api/jobs?sort=rank&hide_not_fit=1").get_json()}
+        self.assertEqual(shown, {"BA remote", "BA hybrid", "BA no pay"})
+        tab = self.client.get("/api/jobs?status=rejected&hide_not_fit=1").get_json()
+        self.assertEqual([j["title"] for j in tab], ["BA rejected"])
+        self.assertIn("BA rejected", {j["title"] for j in self.client.get("/api/jobs").get_json()})
 
         m = self.client.get(f"/api/jobs/{ids['BA remote']}/match").get_json()
         # Qualify and Interest count by rank: ranked 1st of 3 = 1.0 (Interest is a three-way tie for 1st).
