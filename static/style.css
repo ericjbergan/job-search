@@ -419,3 +419,11 @@ button.add-btn.small-add { font-size: 12px; padding: 4px 12px; margin-left: 6px;
 .mix-bar span { display: block; height: 100%; }
 .mix-likes { background: #1e8e3e; } .mix-ok { background: #f0ad4e; } .mix-minimal { background: #c0392b; } .mix-other { background: #9aa3ad; }
 @media (max-width: 700px) { .job-ranks { flex-basis: auto; } }
+
+/* Weight boxes in the Resume & interests card */
+#profilePanel label.weighted { position: relative; }
+#profilePanel .weight-box { float: right; font-size: 12px; color: #777; font-weight: normal; }
+#profilePanel .weight-box input { width: 56px; padding: 2px 4px; margin-left: 4px; }
+#profilePanel .rank-weights { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px 10px; margin-bottom: 8px; }
+#profilePanel .rank-weights label { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin: 0; }
+#profilePanel .rank-weights input { width: 52px; padding: 2px 4px; }

@@ -9,12 +9,30 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import ai, benefits, boards, db, geo, importer, jobhunt, jsearch, ranking, ranking_files, skills
+from jobsearch import (ai, benefits, boards, db, geo, importer, jobhunt, jsearch, profile_files, ranking,
+                       ranking_files, skills)
 from jobsearch.pay import format_pay
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 db.init_db()
+
+
+def fill_profile_from_files(replace=False):
+    """Copy her resume / interests / weights from profile/ into her profile: only the empty ones,
+    or all of them with replace=True ("Load from profile files"). Returns the fields copied."""
+    try:
+        found = profile_files.read_all()
+    except ValueError:
+        return []
+    current = db.get_profile()
+    copy = {k: v for k, v in found.items() if k in db.PROFILE_FIELDS and (replace or not current.get(k))}
+    if copy:
+        db.set_profile(**copy)
+    return sorted(copy)
+
+
+fill_profile_from_files()  # a fresh install starts with her resume and interests filled in
 
 PORT = int(os.getenv("JOBSEARCH_PORT", "5001"))  # 5000 is the book catalog
 
@@ -311,7 +329,20 @@ def api_profile():
     if request.method == "POST":
         data = request.get_json() or {}
         db.set_profile(**{k: data.get(k) for k in db.PROFILE_FIELDS})
-    return jsonify(db.get_profile())
+    else:
+        fill_profile_from_files()
+    return jsonify({**db.get_profile(), "weight_defaults": {
+        **{f"{k}_weight": v for k, v in ranking.MIX_VALUES.items()},
+        **{f"weight_{n}": w for n, _, w in ranking.CRITERIA}}})
+
+
+@app.route("/api/profile/load_files", methods=["POST"])
+def api_profile_load_files():
+    """Replace her resume, interests and weights with what's in the profile/ folder."""
+    copied = fill_profile_from_files(replace=True)
+    if not copied:
+        return _error("No profile files found (profile/Resume.docx and profile/interests.txt)")
+    return jsonify({**db.get_profile(), "copied": copied})
 
 
 @app.route("/api/profile/resume_file", methods=["POST"])

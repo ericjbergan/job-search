@@ -811,7 +811,11 @@ MATCH_CRITERIA = ("skills", "interests", "salary", "benefits", "commute")
 
 # Her interests in three lists (one item per line), plus "interests" for anything else
 # (industries, things to avoid). ranking.py weights the lists differently.
-PROFILE_FIELDS = {"resume": 60000, "likes": 5000, "ok": 5000, "minimal": 5000, "interests": 10000}
+PROFILE_FIELDS = {"resume": 60000, "likes": 5000, "ok": 5000, "minimal": 5000, "interests": 10000,
+                  # how much each kind of work counts (0-100); blank = ranking.py's default
+                  "likes_weight": 10, "ok_weight": 10, "minimal_weight": 10, "other_weight": 10,
+                  # Rank Jobs weights (0-10); blank = ranking.CRITERIA's default
+                  **{f"weight_{n}": 10 for n in ("qualify", "interest", "salary", "retirement", "pto", "commute", "bonus")}}
 
 
 def get_profile():

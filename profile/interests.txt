@@ -1,0 +1,62 @@
+# Jen's interests for Rank Jobs.
+#
+# One item per line under each heading. The number after a heading is how much that kind of
+# work counts (0-100) when Rank Jobs works out the Interest score: the AI estimates what share of
+# a job's work falls under each heading, and the score is the weighted mix. Lines starting with #
+# are notes and are ignored.
+#
+# Edit this file, then use "Load from profile files" in the Resume & interests card (or edit the
+# card directly and click Save).
+
+[Work she likes] 100
+Business analysis and systems analysis work
+Analysis
+Troubleshooting
+Requirements gathering & writing
+Process improvement
+System improvement
+Gap analysis
+Business process analysis
+Root cause analysis
+Change management
+Stakeholder interaction
+Business requirements
+Solution requirements & definition
+User story creation
+
+[Fine in small doses] 55
+# Doesn't love Product Owner work: fine as a smaller part of the job, not a role that is only Product Owner.
+Product Owner tasks, as a smaller part of the job (not a role that is only Product Owner)
+Operational metrics and reporting
+Risk assessment
+KPI analysis
+Cross-functional collaboration
+Governance
+Resource planning
+Prioritization
+Leadership interaction
+
+[Keep to a minimum] 0
+# Does NOT want to be a project manager; doesn't love strategy or heavy executive connection.
+Project management (does NOT want to be a project manager)
+Heavy executive connection
+Budget development and financial performance monitoring
+Managing employees
+Strategy & strategic planning
+Forecasting
+
+[Not on her lists] 35
+# No items here: this is how much work that fits none of the lists above counts (sales, coding...).
+
+[Anything else]
+# Optional: industries, kinds of company, things to avoid. Counts for 20% of the Interest score when filled in.
+
+[Rank Jobs weights]
+# How much each part counts toward the Overall rank (0-10). Higher = more important.
+Qualify: 3
+Interest: 3
+Salary: 2
+Retirement: 2
+Sick & PTO: 1
+Commute: 1
+Bonus: 1

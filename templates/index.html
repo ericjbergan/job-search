@@ -172,31 +172,44 @@
                 </div>
                 <div class="panel-body">
                     <p class="hint">Used by <b>Rank Jobs</b> (above the job list) to rank every job except Rejected and
-                        Not a fit. Overall rank weighs Qualify ×3, Interest ×3, Salary ×2, Retirement ×2, Sick &amp; PTO ×1,
-                        Commute ×1 and Bonus ×1. Qualify and Interest are read from the listings only when she clicks Rank Jobs.</p>
+                        Not a fit. Qualify and Interest are read from the listings only when she clicks Rank Jobs.
+                        Filled in from the <b>profile</b> folder (Resume.docx, interests.txt) when empty.</p>
                     <label>Her resume
                         <textarea id="pResume" rows="5" placeholder="Paste the resume text, or load a Word (.docx) or .txt file"></textarea>
                     </label>
                     <button type="button" class="small secondary" onclick="document.getElementById('pResumeFile').click()">Load resume file…</button>
                     <input type="file" id="pResumeFile" accept=".docx,.txt" class="hidden" onchange="loadResumeFile(this)">
-                    <p class="hint interests-hint">Her interests, one per line. Each job's work is split across these
-                        lists: work she likes counts 100, fine in small doses 55, keep to a minimum 0, anything not listed 35.</p>
-                    <label>Work she likes
+                    <p class="hint interests-hint">Her interests, one per line. Rank Jobs estimates what share of each job's
+                        work falls in each list; the number is how much that kind of work counts (0-100).</p>
+                    <label class="weighted">Work she likes <span class="weight-box">counts <input type="number" id="pLikesW" min="0" max="100" step="5"></span>
                         <textarea id="pLikes" rows="4" placeholder="e.g. Requirements gathering&#10;Process improvement&#10;Root cause analysis"></textarea>
                     </label>
-                    <label>Fine in small doses (not the main job)
+                    <label class="weighted">Fine in small doses (not the main job) <span class="weight-box">counts <input type="number" id="pOkW" min="0" max="100" step="5"></span>
                         <textarea id="pOk" rows="3" placeholder="e.g. KPI analysis&#10;Prioritization"></textarea>
                     </label>
-                    <label>Keep to a minimum
+                    <label class="weighted">Keep to a minimum <span class="weight-box">counts <input type="number" id="pMinimalW" min="0" max="100" step="5"></span>
                         <textarea id="pMinimal" rows="3" placeholder="e.g. Managing employees&#10;Budgets&#10;Strategic planning"></textarea>
                     </label>
+                    <label class="weighted">Work not on her lists (sales, coding…) <span class="weight-box">counts <input type="number" id="pOtherW" min="0" max="100" step="5"></span></label>
                     <label>Anything else (optional)
                         <textarea id="pInterests" rows="2" placeholder="Industries, kinds of company, things to avoid"></textarea>
                     </label>
+                    <p class="hint interests-hint">Rank Jobs weights: how much each part counts toward the Overall rank (0-10).</p>
+                    <div class="rank-weights">
+                        <label>Qualify <input type="number" id="wQualify" min="0" max="10" step="1"></label>
+                        <label>Interest <input type="number" id="wInterest" min="0" max="10" step="1"></label>
+                        <label>Salary <input type="number" id="wSalary" min="0" max="10" step="1"></label>
+                        <label>Retirement <input type="number" id="wRetirement" min="0" max="10" step="1"></label>
+                        <label>Sick &amp; PTO <input type="number" id="wPto" min="0" max="10" step="1"></label>
+                        <label>Commute <input type="number" id="wCommute" min="0" max="10" step="1"></label>
+                        <label>Bonus <input type="number" id="wBonus" min="0" max="10" step="1"></label>
+                    </div>
                     <div class="buttons">
                         <button type="button" class="small" onclick="saveProfile(this)">Save</button>
+                        <button type="button" class="small secondary" onclick="loadProfileFiles(this)"
+                                title="Replace what's here with profile/Resume.docx and profile/interests.txt">Load from profile files</button>
                     </div>
-                    <span class="hint" id="pPrivacyHint">Kept only on this computer. The resume, interests and each listing are sent to the AI when scoring.</span>
+                    <span class="hint" id="pPrivacyHint">Rank Jobs sends the resume (without phone or email), interests and each listing to the AI.</span>
                     <div id="rankStatus" class="hint"></div>
                 </div>
             </section>

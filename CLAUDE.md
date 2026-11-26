@@ -8,7 +8,11 @@ Plain JS/CSS front end (`static/app.js`, `static/style.css`, `templates/index.ht
 
 GitHub `ericjbergan/job-search` is public. Never commit:
 - any database (`jobs.db`, `demo.db`, `*.db`): they hold Jen's statuses, notes and application details
-- `.env` (API keys), `ai-comparison.html`, her spreadsheets, or anything with her personal data
+- `.env` (API keys), `ai-comparison.html`, her spreadsheets, or other personal data of hers
+
+Exception, by Eric's decision (2026-11-26): `profile/Resume.docx` and `profile/interests.txt` are
+committed on purpose (her resume is already public), so a fresh install fills the Resume & interests
+card. Rank Jobs strips phone numbers and emails before sending the resume to the AI.
 - never import or store the spreadsheet's "Log in Info" column (passwords)
 
 Commit only files named explicitly (`git add path1 path2`, never `git add -A` / `.`), and run

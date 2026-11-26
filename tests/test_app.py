@@ -1473,3 +1473,79 @@ class MatchingModelTests(unittest.TestCase):
         kwargs = client.beta.messages.create.call_args.kwargs
         self.assertEqual((kwargs["model"], kwargs["fallbacks"]), ("claude-sonnet-5-5", "default"))
         client.messages.create.assert_not_called()
+
+
+class ProfileFilesTests(FreshDbTest):
+    """profile/Resume.docx and profile/interests.txt fill the Resume & interests card."""
+
+    INTERESTS = """# notes are ignored
+[Work she likes] 90
+Requirements gathering
+Root cause analysis
+
+[Fine in small doses] 50
+KPI analysis
+
+[Keep to a minimum] 10
+Managing employees
+
+[Not on her lists] 30
+
+[Anything else]
+Healthcare
+
+[Rank Jobs weights]
+Qualify: 4
+Interest = 2
+Sick & PTO: 0
+"""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        with open(os.path.join(self.tmp.name, "interests.txt"), "w", encoding="utf-8") as f:
+            f.write(self.INTERESTS)
+        with open(os.path.join(self.tmp.name, "resume.txt"), "w", encoding="utf-8") as f:
+            f.write("Jane Doe\nNewark, OH | Mobile: 555-123-4567 | Email: jane@example.com\nBusiness Analyst, SQL")
+        self.env = mock.patch.dict(os.environ, {"JOBSEARCH_PROFILE_DIR": self.tmp.name})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_file_is_parsed(self):
+        from jobsearch import profile_files
+        d = profile_files.read_interests()
+        self.assertEqual(d["likes"], "Requirements gathering\nRoot cause analysis")
+        self.assertEqual((d["likes_weight"], d["ok_weight"], d["minimal_weight"], d["other_weight"]), ("90", "50", "10", "30"))
+        self.assertEqual(d["interests"], "Healthcare")
+        self.assertEqual((d["weight_qualify"], d["weight_interest"], d["weight_pto"]), ("4", "2", "0"))
+        self.assertNotIn("weight_salary", d)                                   # not listed: default stays
+
+    def test_empty_card_fills_from_files_and_load_replaces(self):
+        p = self.client.get("/api/profile").get_json()
+        self.assertTrue(p["resume"].startswith("Jane Doe"))
+        self.assertEqual((p["likes_weight"], p["weight_qualify"]), ("90", "4"))
+        self.assertEqual(p["weight_defaults"]["weight_salary"], 2)
+        # Her own edits aren't overwritten by a later visit...
+        self.client.post("/api/profile", json={"likes": "Edited by hand"})
+        self.assertEqual(self.client.get("/api/profile").get_json()["likes"], "Edited by hand")
+        # ...until she clicks Load from profile files.
+        p = self.client.post("/api/profile/load_files").get_json()
+        self.assertEqual(p["likes"], "Requirements gathering\nRoot cause analysis")
+        self.assertIn("resume", p["copied"])
+
+    def test_weights_change_scores_without_reading_listings_again(self):
+        from jobsearch import ranking
+        profile = {"likes": "x", "ok": "", "minimal": "", "interests": ""}
+        mix = {"likes": 50, "ok": 0, "minimal": 0, "other": 50}
+        self.assertEqual(ranking.interest_score(mix, None, profile), 50 + 50 * 0.35)
+        self.assertEqual(ranking.interest_score(mix, None, {**profile, "other_weight": "0"}), 50)
+        weights = dict((n, w) for n, _, w in ranking.criteria_weights({"weight_qualify": "5", "weight_bonus": ""}))
+        self.assertEqual((weights["qualify"], weights["interest"], weights["bonus"]), (5, 3, 1))
+
+    def test_contact_details_are_not_sent_to_the_ai(self):
+        from jobsearch import ranking
+        text = ranking.resume_for_ai("Jane Doe\nNewark, OH | Mobile: 555-123-4567 | Email: jane@example.com\nSQL")
+        self.assertEqual(text, "Jane Doe\nNewark, OH\nSQL")

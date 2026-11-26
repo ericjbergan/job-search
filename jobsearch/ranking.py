@@ -40,7 +40,8 @@ PROMPT_VERSION = "2"
 _YEARLY = {"YEAR": 1, "MONTH": 12, "WEEK": 52, "DAY": 260, "HOUR": 2080}
 
 # Her interests come in three lists. The AI estimates what share of a job's work falls in each,
-# and the interests score is the weighted mix (so the weighting is fixed here, not left to the AI):
+# and the interests score is the weighted mix (so the weighting is set here or by her, not by the AI).
+# These are the defaults; her own weights (profile/interests.txt or the card) replace them.
 MIX_VALUES = {"likes": 100, "ok": 55, "minimal": 0, "other": 35}
 MIX_LABELS = {"likes": "work she likes", "ok": "fine in small doses", "minimal": "keep to a minimum",
               "other": "not on her lists"}
@@ -102,14 +103,48 @@ def interests_from_mix(answer, profile):
     total = sum(raw.values())
     if not total:
         return None, None
-    mix = {k: v * 100 / total for k, v in raw.items()}
-    score = sum(mix[k] * MIX_VALUES[k] for k in MIX_VALUES) / 100
-    prefs = _score(answer.get("prefs_score")) if profile.get("interests") else None
+    mix = {k: round(v * 100 / total) for k, v in raw.items()}
+    return interest_score(mix, _score(answer.get("prefs_score")), profile), mix
+
+
+def mix_values(profile):
+    """How much each kind of work counts: her weights where she set them, else the defaults."""
+    out = {}
+    for k, default in MIX_VALUES.items():
+        try:
+            v = float(profile.get(f"{k}_weight"))
+        except (TypeError, ValueError):
+            v = default
+        out[k] = max(0.0, min(100.0, v))
+    return out
+
+
+def interest_score(mix, prefs, profile):
+    """Interest score from the job's mix of work (percentages) and her weights. Worked out again at
+    ranking time, so changing the weights re-ranks without reading the listings again."""
+    values = mix_values(profile)
+    total = sum(mix.get(k, 0) for k in values) or 100
+    score = sum(mix.get(k, 0) * values[k] for k in values) / total
+    prefs = prefs if profile.get("interests") else None
     if prefs is not None and any(profile.get(k) for k in ("likes", "ok", "minimal")):
         score = score * (1 - OTHER_PREFS_WEIGHT) + prefs * OTHER_PREFS_WEIGHT
     elif prefs is not None:
         score = prefs  # only "anything else" was given
-    return score, {k: round(v) for k, v in mix.items()}
+    return score
+
+
+# Contact details aren't needed to judge fit, so they're left out of what's sent to the AI.
+_CONTACT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+|\(?\b\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}\b|\b(?:mobile|phone|cell|email)\s*:?", re.I)
+
+
+def resume_for_ai(resume):
+    """Her resume without email addresses and phone numbers (the file keeps them)."""
+    lines = []
+    for line in (resume or "").split("\n"):
+        cleaned = _CONTACT.sub("", line)
+        cleaned = re.sub(r"(\s*\|\s*)+$", "", re.sub(r"^\s*(\|\s*)+", "", re.sub(r"(\s*\|\s*){2,}", " | ", cleaned)))
+        lines.append(cleaned.rstrip())
+    return "\n".join(lines)
 
 
 def _score(value):
@@ -125,7 +160,7 @@ def _phrases(items):
 
 def read_match(profile, description):
     """Ask the AI how a listing matches her resume and interests. -> (skills, interests, details)"""
-    text = (f"=== HER RESUME\n{profile['resume'][:MAX_TEXT]}\n\n"
+    text = (f"=== HER RESUME\n{resume_for_ai(profile['resume'])[:MAX_TEXT]}\n\n"
             f"=== HER INTERESTS\n{_interests_text(profile)}\n\n"
             f"=== JOB LISTING\n{_clean_text(description)}")
     reply = ai.json_answer(_INSTRUCTIONS, text, task="matching")
@@ -138,7 +173,7 @@ def read_match(profile, description):
         reason = f"{reason} ({', '.join(parts)})" if reason else ", ".join(parts)
     details = {"matched": _phrases(s.get("matched")), "partial": _phrases(s.get("partial")),
                "missing": _phrases(s.get("missing")), "skills_reason": str(s.get("reason") or "")[:300],
-               "interests_reason": reason[:400], "work_mix": mix}
+               "interests_reason": reason[:400], "work_mix": mix, "prefs_score": _score(i.get("prefs_score"))}
     return _score(s.get("score")), interests, details
 
 
@@ -272,7 +307,10 @@ def rank():
             if m.get(override_field) is not None:
                 parts[name] = {"score": m[override_field], "reason": "Your score", "source": "yours"}
             elif m.get(ai_field) is not None:
-                parts[name] = {"score": m[ai_field], "reason": d.get(reason_key) or "", "source": "auto"}
+                score = m[ai_field]
+                if name == "interest" and d.get("work_mix"):  # her current weights, no new AI call
+                    score = interest_score(d["work_mix"], d.get("prefs_score"), profile)
+                parts[name] = {"score": score, "reason": d.get(reason_key) or "", "source": "auto"}
             else:
                 parts[name] = {"score": None, "reason": _missing_reason(name, j, profile), "source": "missing"}
         ratings = {"salary": salary_rating(j),
@@ -301,10 +339,11 @@ def rank():
     # Overall: Qualify and Interest count by their RANK (her spec: "Qualify ranking", "Interest ranking"),
     # spread from 1 (ranked first) to 0 (ranked last). The AI's raw scores bunch together (most BA jobs
     # land 70-90), so weighting the scores would let the 1-5 ratings drown them out.
-    weight_sum = sum(w for _, _, w in CRITERIA)
+    criteria = criteria_weights(profile)
+    weight_sum = sum(w for _, _, w in criteria) or 1
     for v in out.values():
         total = 0.0
-        for name, _, w in CRITERIA:
+        for name, _, w in criteria:
             p = v["parts"][name]
             if name in ("qualify", "interest"):
                 value = 0.5 if p["rank"] is None else (1.0 if p["of"] <= 1 else 1 - (p["rank"] - 1) / (p["of"] - 1))
@@ -316,10 +355,23 @@ def rank():
     for k, v in out.items():
         v["overall_rank"] = overall[k]
     for v in out.values():
-        for name, label, weight in CRITERIA:
+        for name, label, weight in criteria:
             v["parts"][name].update(label=label, weight=weight)
     return {"jobs": out, "count": len(out), "profile_ready": bool(profile["resume"]), "needs_ai": len(stale_ids),
-            "weights": [{"name": n, "label": l, "weight": w} for n, l, w in CRITERIA]}
+            "weights": [{"name": n, "label": l, "weight": w} for n, l, w in criteria]}
+
+
+def criteria_weights(profile):
+    """CRITERIA with her own Rank Jobs weights where she set them (0-10; blank = the default)."""
+    out = []
+    for name, label, default in CRITERIA:
+        try:
+            w = float(profile.get(f"weight_{name}"))
+        except (TypeError, ValueError):
+            w = default
+        w = max(0.0, min(10.0, w))
+        out.append((name, label, int(w) if w == int(w) else w))
+    return out
 
 
 def _missing_reason(name, job, profile):

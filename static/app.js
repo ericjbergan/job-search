@@ -174,7 +174,7 @@ async function loadMeta() {
     state.benefitsAIKey = meta.benefits_ai_key || 'OPENAI_API_KEY';
     state.matchingAI = meta.matching_ai_name || 'ChatGPT';
     const privacy = document.getElementById('pPrivacyHint');
-    if (privacy) privacy.textContent = `Kept only on this computer. The resume, interests and each listing are sent to ${state.matchingAI} when scoring.`;
+    if (privacy) privacy.textContent = `Rank Jobs sends the resume (without phone or email), interests and each listing to ${state.matchingAI}.`;
     state.aiLookups = meta.ai_lookups_this_month;
     renderStatusTabs(meta.status_counts);
     renderUsage(meta.pages_used_this_month);
@@ -1043,12 +1043,40 @@ function rankColumn(job) {
 
 // Profile boxes on the page -> the names the server stores them under.
 const PROFILE_BOXES = [['pResume', 'resume'], ['pLikes', 'likes'], ['pOk', 'ok'], ['pMinimal', 'minimal'],
-                       ['pInterests', 'interests']];
+                       ['pInterests', 'interests'],
+                       // weights: interest categories (0-100) and Rank Jobs parts (0-10)
+                       ['pLikesW', 'likes_weight'], ['pOkW', 'ok_weight'], ['pMinimalW', 'minimal_weight'],
+                       ['pOtherW', 'other_weight'], ['wQualify', 'weight_qualify'], ['wInterest', 'weight_interest'],
+                       ['wSalary', 'weight_salary'], ['wRetirement', 'weight_retirement'], ['wPto', 'weight_pto'],
+                       ['wCommute', 'weight_commute'], ['wBonus', 'weight_bonus']];
+
+function fillProfile(p) {
+    const defaults = p.weight_defaults || state.weightDefaults || {};
+    state.weightDefaults = defaults;
+    for (const [id, key] of PROFILE_BOXES) {
+        const box = document.getElementById(id);
+        box.value = p[key] || (key in defaults ? defaults[key] : '');
+    }
+}
 
 async function loadProfile() {
-    const p = await api('/api/profile');
-    for (const [id, key] of PROFILE_BOXES) document.getElementById(id).value = p[key] || '';
+    fillProfile(await api('/api/profile'));
     await loadRankStatus();
+}
+
+async function loadProfileFiles(button) {
+    if (!confirm('Replace the resume, interests and weights here with the ones in the profile folder?')) return;
+    button.disabled = true;
+    try {
+        fillProfile(await api('/api/profile/load_files', { method: 'POST' }));
+        showMessage('Loaded from the profile folder. Click Rank Jobs to rank with them.');
+        await loadRankStatus();
+        await loadJobs();
+    } catch (e) {
+        showMessage(e.message, true);
+    } finally {
+        button.disabled = false;
+    }
 }
 
 async function loadRankStatus() {
@@ -1091,8 +1119,11 @@ async function saveProfile(button) {
         const body = {};
         for (const [id, key] of PROFILE_BOXES) body[key] = document.getElementById(id).value;
         await api('/api/profile', { method: 'POST', body });
-        showMessage('Saved. Click Rank Jobs to rank with the new resume or interests.');
         await loadRankStatus();
+        await loadJobs();  // new weights re-rank right away; a new resume or lists need Rank Jobs
+        showMessage(state.rankInfo && state.rankInfo.needs_ai
+            ? 'Saved. Click Rank Jobs to read the listings against the new resume or interests.'
+            : 'Saved. The ranks are updated with the new weights.');
     } catch (e) {
         showMessage(e.message, true);
     } finally {
