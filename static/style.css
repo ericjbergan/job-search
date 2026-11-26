@@ -362,3 +362,39 @@ aside { position: sticky; top: 0; max-height: 100vh; overflow-y: auto; padding-b
 .skill-pct { font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
 .skill-split { grid-column: 1 / -1; font-size: 11px; color: #888; }
 #skillsAnalyzeBtn { margin: 6px 0 2px; }
+
+/* Match scores (ranking Interested jobs) */
+.match-badge { display: inline-block; font-weight: 700; font-size: 12px; padding: 2px 8px; border-radius: 10px; margin-bottom: 4px; }
+.match-badge.high { background: #1e8e3e; color: #fff; }
+.match-badge.mid { background: #f0ad4e; color: #fff; }
+.match-badge.low { background: #e9ecef; color: #555; }
+.match-badge.big { font-size: 18px; padding: 3px 12px; }
+.match-box { border: 1px solid #e3e6ea; border-radius: 6px; padding: 10px 12px; margin: 0 0 12px; background: #fbfcfe; }
+.match-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.match-head h4 { margin: 0; font-size: 13px; color: #1f3a5f; text-transform: uppercase; letter-spacing: 0.03em; }
+.match-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.match-table th, .match-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eef0f3; font-size: 13px; vertical-align: middle; }
+.match-table th { width: 190px; font-weight: 600; }
+.match-table .weight { color: #999; font-weight: normal; font-size: 11px; }
+.match-table td.num { width: 70px; }
+.match-table td.num input { width: 60px; padding: 3px 5px; }
+.match-table td.why { color: #555; }
+.match-table tr.missing td.why { color: #999; font-style: italic; }
+.match-table tr.yours td.num input { border-color: #8a4b00; background: #fff3e0; }
+.match-chips { margin: 4px 0; font-size: 12px; }
+.chips-title { font-weight: 600; margin-right: 6px; color: #555; }
+.chip-s { display: inline-block; padding: 1px 7px; border-radius: 9px; margin: 2px 4px 2px 0; }
+.chip-s.ok { background: #e6f4ea; color: #1e6b34; }
+.chip-s.part { background: #fff4e0; color: #8a4b00; }
+.chip-s.miss { background: #fdecea; color: #a12a1f; }
+#profilePanel textarea { width: 100%; resize: vertical; }
+
+/* Jobs with no description */
+.badge.no-desc { background: #f1f3f5; color: #777; border: 1px dashed #c4c9cf; }
+.desc-missing { border: 1px dashed #c4c9cf; border-radius: 6px; padding: 10px 12px; margin: 0 0 12px; background: #fafbfc; }
+.desc-missing .desc-status { font-size: 13px; color: #555; margin-bottom: 6px; }
+.desc-missing textarea, textarea.desc-edit { width: 100%; resize: vertical; font-size: 13px; }
+#fillDescBtn { margin-left: 6px; }
+
+/* Ranking button on the Interested tab */
+button.add-btn.small-add { font-size: 12px; padding: 4px 12px; margin-left: 6px; }

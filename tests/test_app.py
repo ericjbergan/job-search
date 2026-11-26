@@ -11,6 +11,7 @@ import subprocess
 import os
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "jsearch_sample.json")
@@ -1240,3 +1241,151 @@ class SkillsTests(FreshDbTest):
             r = self.client.post("/api/skills/analyze", json={})
         self.assertEqual(r.status_code, 400)
         self.assertIn("OPENAI_API_KEY", r.get_json()["error"])
+
+
+class RankingTests(FreshDbTest):
+    """Match scores for Interested jobs (the AI is faked)."""
+
+    def add_interested(self):
+        long = " Requirements: SQL, Jira, stakeholder interviews." * 10
+        jobs = [board_job(1, "BA remote", "Columbus, OH"), board_job(2, "BA hybrid", "Dublin, OH"),
+                board_job(3, "BA no pay", "Westerville, OH")]
+        for j in jobs:
+            j["job_description"] = j["job_title"] + long
+        db.save_results(jobs)
+        ids = {j["title"]: j["id"] for j in db.list_jobs()}
+        with db.connect() as conn:
+            conn.execute("UPDATE jobs SET status='interested', salary_min=110000, salary_max=130000, salary_period='YEAR', "
+                         "work_mode='remote' WHERE id=?", (ids["BA remote"],))
+            conn.execute("UPDATE jobs SET status='interested', salary_min=40, salary_max=44, salary_period='HOUR', "
+                         "work_mode='hybrid' WHERE id=?", (ids["BA hybrid"],))
+            conn.execute("UPDATE jobs SET status='interested' WHERE id=?", (ids["BA no pay"],))
+        return ids
+
+    def fake_ai(self, instructions, text, task="listings"):
+        self.assertEqual(task, "matching")
+        score = 80 if "BA remote" in text else 50
+        return json.dumps({"skills": {"score": score, "matched": ["SQL"], "partial": [], "missing": ["Jira"], "reason": "ok"},
+                           "interests": {"score": 60, "reason": "fits"}})
+
+    def score(self):
+        from jobsearch import ranking
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test", "AI_MATCHING": "openai"}), \
+                mock.patch.object(ranking.ai, "json_answer", side_effect=self.fake_ai) as fake:
+            r = self.client.post("/api/ranking/score")
+        return r, fake.call_count
+
+    def test_salary_is_ranked_against_the_others(self):
+        from jobsearch import ranking
+        jobs = [{"id": 1, "salary_min": 80000, "salary_max": 80000, "salary_period": "YEAR"},
+                {"id": 2, "salary_min": 48, "salary_max": 48, "salary_period": "HOUR"},       # ~99,840/yr
+                {"id": 3, "salary_min": 120000, "salary_max": None, "salary_period": "YEAR"},
+                {"id": 4}]
+        s = ranking.salary_scores(jobs)
+        self.assertEqual({k: v[0] for k, v in s.items()}, {1: 0, 2: 50, 3: 100})
+
+    def test_benefits_and_commute_scores(self):
+        from jobsearch import ranking
+        self.assertEqual(ranking.benefits_score({"retirement_score": 4, "pto_score": 2, "bonus_score": 1})[0], 50)
+        self.assertIsNone(ranking.benefits_score({"retirement_score": 2, "pto_score": 2, "bonus_score": 2}))
+        home = (40.0, -83.0)
+        self.assertEqual(ranking.commute_score({"work_mode": "remote"}, home)[0], 100)
+        self.assertIsNone(ranking.commute_score({"work_mode": "hybrid", "location": "Somewhere"}, home))
+        near = ranking.commute_score({"work_mode": "hybrid", "location": "Columbus, OH"}, home)[0]
+        far = ranking.commute_score({"work_mode": "onsite", "location": "Cleveland, OH"}, home)[0]
+        self.assertGreater(near, far)
+
+    def test_scoring_needs_a_resume(self):
+        self.add_interested()
+        r, calls = self.score()
+        self.assertEqual((r.status_code, calls), (400, 0))
+        self.assertIn("resume", r.get_json()["error"])
+
+    def test_composite_overrides_and_sort(self):
+        ids = self.add_interested()
+        self.client.post("/api/profile", json={"resume": "Business analyst, 8 years, SQL", "interests": "healthcare"})
+        r, calls = self.score()
+        self.assertEqual((r.status_code, r.get_json()["read"], calls), (200, 3, 3))
+        jobs = self.client.get("/api/ranking").get_json()["jobs"]
+        remote = jobs[str(ids["BA remote"])]
+        by = {c["name"]: c for c in remote["criteria"]}
+        self.assertEqual((by["skills"]["score"], by["salary"]["score"], by["commute"]["score"]), (80, 100, 100))
+        self.assertEqual(by["benefits"]["source"], "missing")            # no benefits info: counts as 50
+        self.assertEqual(remote["score"], round((5 * 80 + 4 * 60 + 3 * 100 + 2 * 50 + 1 * 100) / 15))
+        self.assertEqual(remote["missing"], ["Jira"])
+        no_pay = jobs[str(ids["BA no pay"])]
+        self.assertEqual({c["name"]: c["source"] for c in no_pay["criteria"]}["salary"], "missing")
+
+        # Her own score wins, and clearing it goes back to the calculated one.
+        m = self.client.patch(f"/api/jobs/{ids['BA no pay']}/match", json={"skills": 100}).get_json()
+        self.assertEqual({c["name"]: (c["score"], c["source"]) for c in m["criteria"]}["skills"], (100, "yours"))
+        self.assertEqual(self.client.patch(f"/api/jobs/{ids['BA no pay']}/match", json={"skills": 101}).status_code, 400)
+        ordered = self.client.get("/api/jobs?status=interested&sort=match").get_json()
+        scores = [j["match_score"] for j in ordered]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+        # Nothing to redo until the resume changes.
+        self.assertEqual(self.score()[1], 0)
+        self.client.post("/api/profile", json={"resume": "Business analyst, 9 years, SQL, Jira"})
+        self.assertEqual(self.client.get("/api/ranking").get_json()["needs_ai"], 3)
+
+    def test_resume_from_word_file(self):
+        from jobsearch import ranking_files
+        body = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+                '<w:p><w:r><w:t>Jane Doe</w:t></w:r></w:p><w:p><w:r><w:t>Business Analyst</w:t></w:r></w:p>'
+                '</w:body></w:document>')
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("word/document.xml", body)
+        self.assertEqual(ranking_files.resume_text("r.docx", buf.getvalue()), "Jane Doe\nBusiness Analyst")
+        with self.assertRaisesRegex(ValueError, "paste"):
+            ranking_files.resume_text("r.pdf", b"%PDF")
+
+
+class DescriptionTests(FreshDbTest):
+    """Jobs with no description: filter, paste it in by hand, and keep it."""
+
+    TEXT = "We are hiring a business analyst to gather requirements and run UAT. " * 6
+
+    def setUp(self):
+        super().setUp()
+        empty, full = board_job(1, "No text"), board_job(2, "Has text")
+        empty["job_description"], full["job_description"] = None, self.TEXT
+        db.save_results([empty, full])
+        self.ids = {j["title"]: j["id"] for j in db.list_jobs()}
+
+    def test_filter_and_flag(self):
+        listed = {j["title"]: j["has_description"] for j in self.client.get("/api/jobs").get_json()}
+        self.assertEqual(listed, {"No text": 0, "Has text": 1})
+        only = self.client.get("/api/jobs?no_description=1").get_json()
+        self.assertEqual([j["title"] for j in only], ["No text"])
+
+    def test_pasted_description_is_kept(self):
+        jid = self.ids["No text"]
+        r = self.client.patch(f"/api/jobs/{jid}", json={"description": "Pasted:\r\n\r\n\r\n" + self.TEXT})
+        self.assertEqual(r.status_code, 200)
+        job = db.get_job(jid)
+        self.assertTrue(job["description"].startswith("Pasted:\n\n"))
+        self.assertIn("description", json.loads(job["edited_fields"]))
+        # Reload from listing doesn't replace what she pasted...
+        fresh = board_job(1, "No text")
+        fresh["job_description"] = "From the site " * 30
+        db.refresh_job(jid, fresh)
+        self.assertTrue(db.get_job(jid)["description"].startswith("Pasted:"))
+        # ...and neither does a search that finds the job again.
+        again = board_job(1, "No text")
+        again["job_description"] = "Search result text " * 30
+        db.save_results([again])
+        self.assertTrue(db.get_job(jid)["description"].startswith("Pasted:"))
+        self.assertEqual(self.client.get("/api/jobs?no_description=1").get_json(), [])
+
+    def test_search_without_description_keeps_the_saved_one(self):
+        jid = self.ids["Has text"]
+        again = board_job(2, "Has text")
+        again["job_description"] = ""
+        db.save_results([again])
+        self.assertEqual(db.get_job(jid)["description"], self.TEXT)
+
+    def test_too_long_is_refused(self):
+        r = self.client.patch(f"/api/jobs/{self.ids['No text']}", json={"description": "x" * 50001})
+        self.assertEqual(r.status_code, 400)

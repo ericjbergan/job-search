@@ -165,6 +165,32 @@
                 </div>
             </section>
 
+            <section class="panel collapsible" id="profilePanel">
+                <div class="panel-head">
+                    <h2 class="collapse-toggle" onclick="togglePanel('profilePanel')" title="Show or hide">
+                        <span class="chev">▾</span> Ranking Interested jobs</h2>
+                </div>
+                <div class="panel-body">
+                    <p class="hint">Each Interested job gets a match score (0-100) from five things, most important first:
+                        skills &amp; qualifications ×5, interests ×4, salary ×3 (compared with the other Interested jobs),
+                        benefits ×2, commute ×1. Sort by <b>Best match</b> to rank them.</p>
+                    <label>Her resume
+                        <textarea id="pResume" rows="5" placeholder="Paste the resume text, or load a Word (.docx) or .txt file"></textarea>
+                    </label>
+                    <button type="button" class="small secondary" onclick="document.getElementById('pResumeFile').click()">Load resume file…</button>
+                    <input type="file" id="pResumeFile" accept=".docx,.txt" class="hidden" onchange="loadResumeFile(this)">
+                    <label>Her interests
+                        <textarea id="pInterests" rows="4" placeholder="Industries, kinds of work, what she enjoys, anything she wants to avoid"></textarea>
+                    </label>
+                    <div class="buttons">
+                        <button type="button" class="small" onclick="saveProfile(this)">Save</button>
+                        <button type="button" class="small" id="scoreJobsBtn" onclick="scoreJobs(this)">Score Interested jobs</button>
+                    </div>
+                    <span class="hint">Kept only on this computer. The resume, interests and each listing are sent to ChatGPT when scoring.</span>
+                    <div id="rankStatus" class="hint"></div>
+                </div>
+            </section>
+
             <section class="panel collapsible" id="skillsPanel">
                 <div class="panel-head">
                     <h2 class="collapse-toggle" onclick="togglePanel('skillsPanel')" title="Show or hide">
@@ -209,6 +235,11 @@
                 <div class="status-row">
                     <div id="statusTabs"></div>
                     <label class="check hide-not-fit"><input type="checkbox" id="hideNotFit" onchange="loadJobs()" checked> Hide not a fit</label>
+                    <label class="check hide-not-fit" title="Show only jobs that have no description yet">
+                        <input type="checkbox" id="noDescFilter" onchange="loadJobs()"> No description</label>
+                    <button type="button" class="small hidden" id="fillDescBtn" onclick="fillMissingDescriptions(this)"
+                            title="Try Reload from listing on each of these jobs">Reload these from their listings</button>
+                    <button type="button" class="add-btn small-add hidden" id="rankBtn" onclick="rankButtonClick(this)">Score Interested jobs</button>
                 </div>
                 <div class="filter-row">
                     <input id="textFilter" placeholder="Filter by title, company, description, notes" oninput="debouncedLoadJobs()">
@@ -228,6 +259,7 @@
                     </select>
                     <select id="sortJobs" onchange="loadJobs()" title="Sort jobs">
                         <option value="found">Newest found</option>
+                        <option value="match">Best match (Interested)</option>
                         <option value="posted">Newest posted</option>
                         <option value="pay">Highest pay</option>
                         <option value="closes">Closing soonest</option>

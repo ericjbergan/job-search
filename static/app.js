@@ -277,7 +277,7 @@ function togglePanel(id, open) {
 }
 
 function restorePanels() {
-    for (const id of ['jsearchPanel', 'companiesPanel', 'skillsPanel']) {
+    for (const id of ['jsearchPanel', 'companiesPanel', 'profilePanel', 'skillsPanel']) {
         let collapsed = false;
         try { collapsed = localStorage.getItem(`collapsed:${id}`) === '1'; } catch (e) { /* ignore */ }
         document.getElementById(id).classList.toggle('collapsed', collapsed);
@@ -407,6 +407,7 @@ function resetJobFilters() {
     document.getElementById('workModeFilter').value = '';
     document.getElementById('interestFilter').value = '';
     document.getElementById('hideNotFit').checked = true;
+    document.getElementById('noDescFilter').checked = false;
     document.getElementById('sortJobs').value = 'found';
     refreshAll();
 }
@@ -741,6 +742,8 @@ async function loadJobs() {
     const interest = document.getElementById('interestFilter').value;
     if (interest) params.append('interest', interest);
     if (document.getElementById('hideNotFit').checked) params.append('hide_not_fit', '1');
+    const noDesc = document.getElementById('noDescFilter').checked;
+    if (noDesc) params.append('no_description', '1');
     params.append('sort', document.getElementById('sortJobs').value);
 
     const chip = document.getElementById('searchFilterChip');
@@ -764,6 +767,13 @@ async function loadJobs() {
 
     const jobs = await api(`/api/jobs?${params}`);
     const list = document.getElementById('jobList');
+    state.listedJobs = jobs;
+    const fillBtn = document.getElementById('fillDescBtn');
+    const reloadable = jobs.filter(j => !j.has_description && j.apply_link).length;
+    fillBtn.classList.toggle('hidden', !noDesc || !reloadable || !!fillBtn.dataset.busy);
+    if (!fillBtn.dataset.busy) fillBtn.textContent = `Reload these ${reloadable} from their listings`;
+    // The ranking button shows on the Interested tab; its counts change as jobs are marked Interested.
+    if (state.status === 'interested') loadRankStatus().catch(() => {}); else updateRankButton();
     if (jobs.length === 0) {
         list.innerHTML = '<div class="panel empty">No jobs match. Run a search to add some.</div>';
         return;
@@ -786,6 +796,7 @@ function renderJobSummary(job) {
                 ${job.req_number ? `<span class="badge req" title="Requisition / posting number">Req ${esc(job.req_number)}</span> ` : ''}
                 ${job.added_by_hand ? '<span class="badge by-hand" title="Added from its listing link">Added by hand</span> ' : ''}
                 ${job.found_where ? `<span class="badge found" title="Where you found this job">Found: ${esc(job.found_where)}</span> ` : ''}
+                ${job.has_description ? '' : '<span class="badge no-desc" title="No job description saved yet">No description</span> '}
                 <span class="badge status-badge ${esc(job.status)}">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}${job.interest_level && (interested || applied) ? ' · ' + esc(INTEREST_LABELS[job.interest_level]) : ''}</span>
                 <div class="flag-buttons">
                     <button class="flag ${interested ? 'on interested' : ''}" onclick="toggleFlag(event, ${job.id}, 'interested', '${esc(job.status)}')">★ Interested</button>
@@ -796,6 +807,8 @@ function renderJobSummary(job) {
                 ${interested || applied ? interestChooser(job) : ''}
             </div>
             <div class="job-side">
+                ${job.match_score !== null && job.match_score !== undefined
+                    ? `<div class="match-badge ${matchClass(job.match_score)}" title="Match score (open the job for the breakdown)">${job.match_score} match</div>` : ''}
                 ${salary ? `<div class="salary" title="${esc(job.salary_text || '')}">${esc(salary)}</div>` : '<div class="no-pay">pay not listed</div>'}
                 <div>${job.posted_at ? 'posted ' + esc(shortDate(job.posted_at)) : ''}</div>
                 ${closes ? `<div class="${closes.startsWith('closed') ? 'closed' : 'closes'}">${esc(closes)}</div>` : ''}
@@ -834,9 +847,10 @@ async function openJob(jobId, closeOthers) {
             ${apply ? `<a class="apply" href="${apply}" target="_blank" rel="noopener noreferrer">Go to listing ↗</a>` : ''}
             ${apply ? `<button class="small secondary" onclick="reloadJob(${job.id}, this)" title="Read the listing page again to fill in the description and details">Reload from listing</button>` : ''}
         </div>
+        ${job.status === 'interested' ? `<div class="match-box" id="match-${job.id}"><div class="hint">Loading match score…</div></div>` : ''}
         ${jobEditHtml(job)}
         ${jobBenefitsHtml(job)}
-        <div class="description">${esc(job.description || 'No description provided.')}</div>
+        ${descriptionHtml(job)}
         <div class="detail-meta">
             ${job.req_number ? `Req # ${esc(job.req_number)} · ` : ''}
             ${job.posted_at ? `Posted ${esc(shortDate(job.posted_at))} · ` : ''}
@@ -848,6 +862,114 @@ async function openJob(jobId, closeOthers) {
             First saved ${esc(relativeDate(job.first_seen_at))} · last seen in results ${esc(relativeDate(job.last_seen_at))}
         </div>
     `;
+    if (job.status === 'interested') loadMatch(job.id).catch(e => showMessage(e.message, true));
+    // No description yet: try the listing once on its own; if that fails she can paste it.
+    if (!hasDescription(job) && apply && !state.autoReloaded.has(job.id)) {
+        state.autoReloaded.add(job.id);
+        autoFillDescription(job.id);
+    }
+}
+
+// --- job descriptions -------------------------------------------------------------------------
+// A job with no description gets one Reload from listing automatically when opened; if the listing
+// can't be read (LinkedIn, Indeed... refuse), she pastes the text into the box instead.
+
+const MIN_DESCRIPTION = 200;  // same as the server: shorter counts as no description
+state.autoReloaded = new Set();
+
+function hasDescription(job) {
+    return (job.description || '').trim().length >= MIN_DESCRIPTION;
+}
+
+function descriptionHtml(job) {
+    if (hasDescription(job)) return `<div class="description">${esc(job.description)}</div>`;
+    return `
+        <div class="desc-missing" id="descbox-${job.id}">
+            <div class="desc-status" id="descstatus-${job.id}">${job.apply_link
+                ? 'No description yet.' : 'No description yet, and there is no listing link to read it from.'}</div>
+            <label>Paste the job description from the listing
+                <textarea id="descpaste-${job.id}" rows="8"
+                    placeholder="On the listing page press Ctrl+A, then Ctrl+C, and paste here (Ctrl+V)">${esc(job.description || '')}</textarea>
+            </label>
+            <button class="small" onclick="saveDescription(${job.id}, this)">Save description</button>
+        </div>`;
+}
+
+async function autoFillDescription(jobId) {
+    const status = document.getElementById(`descstatus-${jobId}`);
+    if (status) status.textContent = 'No description yet. Reading the listing for it…';
+    try {
+        const r = await api(`/api/jobs/${jobId}/reload`, { method: 'POST' });
+        if (hasDescription(r.job)) {
+            await refreshAfterDescription(jobId, `Filled in the description for “${r.job.title}” from the listing.`);
+            return;
+        }
+        if (status) status.textContent = "The listing didn't include a description. Paste it below.";
+    } catch (e) {
+        if (status) {
+            status.textContent = "Couldn't get the description from the listing (the site may block automatic reading, "
+                + 'or the job may be closed). Paste it below.';
+            status.title = e.message;
+        }
+    }
+}
+
+// Redraw after a description is filled in. With the "No description" filter on, the job leaves
+// the list, so it's only reopened if it's still showing.
+async function refreshAfterDescription(jobId, message) {
+    await loadJobs();
+    if (state.openJobId === jobId && document.getElementById(`detail-${jobId}`)) await openJob(jobId, false);
+    showMessage(message);
+    loadSkills().catch(() => {});
+}
+
+async function saveDescription(jobId, button) {
+    const text = document.getElementById(`descpaste-${jobId}`).value;
+    if (text.trim().length < MIN_DESCRIPTION) {
+        showMessage('That looks too short to be the whole description. Copy the full listing text and paste it in.', true);
+        return;
+    }
+    button.disabled = true;
+    try {
+        const job = await api(`/api/jobs/${jobId}`, { method: 'PATCH', body: { description: text } });
+        await refreshAfterDescription(jobId, `Description saved for “${job.title}”. Reload from listing won’t replace it.`);
+    } catch (e) {
+        showMessage(e.message, true);
+        button.disabled = false;
+    }
+}
+
+// Reload from listing for every listed job that has no description, a few at a time.
+async function fillMissingDescriptions(button) {
+    const todo = (state.listedJobs || []).filter(j => !j.has_description && j.apply_link);
+    if (!todo.length) return;
+    button.dataset.busy = '1';
+    button.disabled = true;
+    let done = 0, filled = 0;
+    const failed = [];
+    const worker = async () => {
+        while (todo.length) {
+            const job = todo.shift();
+            try {
+                const r = await api(`/api/jobs/${job.id}/reload`, { method: 'POST' });
+                if (hasDescription(r.job)) filled++; else failed.push(job.title);
+            } catch (e) {
+                failed.push(job.title);
+            }
+            done++;
+            button.textContent = `Reading listings… ${done} done, ${filled} filled in`;
+        }
+    };
+    try {
+        await Promise.all([worker(), worker(), worker()]);
+        showMessage(`Filled in ${filled} description${filled === 1 ? '' : 's'}.` + (failed.length
+            ? ` ${failed.length} couldn't be read from the listing; open those jobs to paste the text in.` : ''));
+    } finally {
+        delete button.dataset.busy;
+        button.disabled = false;
+        await loadJobs();
+        await loadSkills();
+    }
 }
 
 async function updateJob(jobId, fields) {
@@ -887,6 +1009,183 @@ async function refreshAll() {
     await loadCompanies();
     await loadJobs();
     await loadSkills();
+    await loadProfile();
+}
+
+// --- ranking Interested jobs ------------------------------------------------------------------
+
+function matchClass(score) {
+    return score >= 75 ? 'high' : score >= 55 ? 'mid' : 'low';
+}
+
+async function loadProfile() {
+    const p = await api('/api/profile');
+    document.getElementById('pResume').value = p.resume || '';
+    document.getElementById('pInterests').value = p.interests || '';
+    await loadRankStatus();
+}
+
+async function loadRankStatus() {
+    const r = await api('/api/ranking');
+    state.rankInfo = r;
+    const n = Object.keys(r.jobs).length;
+    const btn = document.getElementById('scoreJobsBtn');
+    if (!btn.dataset.busy) {
+        btn.disabled = !r.profile_ready || !r.needs_ai;
+        btn.textContent = !r.profile_ready ? 'Score Interested jobs' : r.needs_ai ? `Score ${r.needs_ai} job${r.needs_ai === 1 ? '' : 's'}` : 'All jobs scored';
+    }
+    document.getElementById('rankStatus').textContent = !r.profile_ready
+        ? 'Add her resume, then Save, to score skills and interests.'
+        : `${n} Interested job${n === 1 ? '' : 's'}${r.needs_ai ? `, ${r.needs_ai} to score` : ', all scored'}.`;
+    updateRankButton();
+}
+
+// The ranking button on the Interested tab (next to the filters), so scoring is where the jobs are.
+function updateRankButton() {
+    const btn = document.getElementById('rankBtn');
+    const r = state.rankInfo;
+    const show = state.status === 'interested' && r && Object.keys(r.jobs).length > 0;
+    btn.classList.toggle('hidden', !show);
+    if (!show || btn.dataset.busy) return;
+    if (!r.profile_ready) {
+        btn.textContent = 'Score Interested jobs';
+        btn.title = 'Add her resume first (Ranking Interested jobs, in the sidebar)';
+    } else if (r.needs_ai) {
+        btn.textContent = `Score ${r.needs_ai} Interested job${r.needs_ai === 1 ? '' : 's'}`;
+        btn.title = 'Have ChatGPT compare these listings with her resume and interests';
+    } else {
+        btn.textContent = document.getElementById('sortJobs').value === 'match' ? 'Ranked by best match ✓' : 'Rank by best match';
+        btn.title = 'All Interested jobs are scored; sort them best match first';
+    }
+}
+
+async function rankButtonClick(button) {
+    const r = state.rankInfo;
+    if (!r || !r.profile_ready) {
+        togglePanel('profilePanel', true);
+        document.getElementById('profilePanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('pResume').focus();
+        showMessage("Add her resume (and interests) in the Ranking card, click Save, then score.", true);
+        return;
+    }
+    if (r.needs_ai) {
+        button.dataset.busy = '1';
+        button.disabled = true;
+        try {
+            await scoreJobs(button);
+        } finally {
+            delete button.dataset.busy;
+            button.disabled = false;
+        }
+    }
+    document.getElementById('sortJobs').value = 'match';
+    await loadJobs();
+    updateRankButton();
+}
+
+async function saveProfile(button) {
+    button.disabled = true;
+    try {
+        await api('/api/profile', { method: 'POST', body: {
+            resume: document.getElementById('pResume').value, interests: document.getElementById('pInterests').value } });
+        showMessage('Saved. Click Score to score jobs with the new resume or interests.');
+        await loadRankStatus();
+    } catch (e) {
+        showMessage(e.message, true);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function loadResumeFile(input) {
+    const file = input.files[0];
+    input.value = '';
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+        const res = await fetch('/api/profile/resume_file', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not read the file');
+        document.getElementById('pResume').value = data.text;
+        showMessage(`Loaded ${file.name}. Check it, then click Save.`);
+    } catch (e) {
+        showMessage(e.message, true);
+    }
+}
+
+// Scores in small batches so the button can show progress.
+async function scoreJobs(button) {
+    button.dataset.busy = '1';
+    button.disabled = true;
+    let done = 0;
+    try {
+        while (true) {
+            button.textContent = `Scoring… ${done} done`;
+            const r = await api('/api/ranking/score', { method: 'POST' });
+            done += r.read;
+            if (r.errors.length) showMessage(`Some jobs couldn't be scored (they'll be tried again): ${r.errors[0]}`, true);
+            if (!r.remaining || !r.read) break;
+        }
+        showMessage(`Scored ${done} job${done === 1 ? '' : 's'}. Sort by Best match to rank them.`);
+    } catch (e) {
+        showMessage(e.message, true);
+    } finally {
+        delete button.dataset.busy;
+        await loadRankStatus();
+        await loadJobs();
+    }
+}
+
+async function loadMatch(jobId) {
+    const box = document.getElementById(`match-${jobId}`);
+    if (!box) return;
+    const m = await api(`/api/jobs/${jobId}/match`);
+    if (!m) { box.innerHTML = ''; return; }
+    const rows = m.criteria.map(c => `
+        <tr class="${c.source}">
+            <th>${esc(c.label)} <span class="weight">×${c.weight}</span></th>
+            <td class="num"><input type="number" min="0" max="100" id="mo-${c.name}-${jobId}"
+                value="${c.source === 'yours' ? c.score : ''}" placeholder="${c.score === null ? '–' : c.score}"
+                title="Type your own score (0-100) to replace this one"></td>
+            <td class="why">${esc(c.reason || '')}${c.source === 'yours'
+                ? ` <a class="small-link" onclick="clearMatchScore(${jobId}, '${c.name}')">use calculated</a>` : ''}</td>
+        </tr>`).join('');
+    const chips = (title, items, cls) => items.length
+        ? `<div class="match-chips"><span class="chips-title">${title}</span>${items.map(i => `<span class="chip-s ${cls}">${esc(i)}</span>`).join('')}</div>` : '';
+    box.innerHTML = `
+        <div class="match-head">
+            <h4>Match score</h4>
+            ${m.score === null ? '<span class="hint">Not enough information yet</span>'
+                : `<span class="match-badge big ${matchClass(m.score)}">${m.score}</span>
+                   <span class="hint">based on ${m.based_on} of 5</span>`}
+            ${m.needs_ai ? '<span class="hint">· resume, interests or listing changed: click Score in the sidebar</span>' : ''}
+        </div>
+        <table class="match-table">${rows}</table>
+        ${chips('Meets', m.matched, 'ok')}${chips('Partly', m.partial, 'part')}${chips('Missing', m.missing, 'miss')}
+        <button class="small" onclick="saveMatchScores(${jobId})">Save my scores</button>
+        <span class="hint">Blank boxes use the calculated score shown in grey. Anything missing counts as 50.</span>`;
+}
+
+async function saveMatchScores(jobId) {
+    const body = {};
+    for (const name of ['skills', 'interests', 'salary', 'benefits', 'commute']) {
+        body[name] = document.getElementById(`mo-${name}-${jobId}`).value;
+    }
+    try {
+        await api(`/api/jobs/${jobId}/match`, { method: 'PATCH', body });
+        await loadMatch(jobId);
+        await loadJobs();
+        showMessage('Scores saved.');
+    } catch (e) {
+        showMessage(e.message, true);
+    }
+}
+
+async function clearMatchScore(jobId, name) {
+    await api(`/api/jobs/${jobId}/match`, { method: 'PATCH', body: { [name]: '' } });
+    await loadMatch(jobId);
+    await loadJobs();
 }
 
 // --- skills & certifications ---------------------------------------------------------
@@ -912,7 +1211,7 @@ function renderSkills() {
         ? `Based on ${s.read} of ${s.total_jobs} jobs.${noText}`
         : `No listings analyzed yet.${noText}`;
     document.getElementById('skillsTables').innerHTML =
-        skillTable('Certifications', s.certs, 'certs') + skillTable('Tools & software', s.tools, 'tools');
+        skillTable('Tools & software', s.tools, 'tools') + skillTable('Certifications', s.certs, 'certs');
 }
 
 function skillTable(title, items, id) {
@@ -1004,7 +1303,7 @@ async function saveJobCompany(event, jobId) {
 
 // Listing details (filled in from the site, editable) and her own application fields.
 // Listing fields are sent only when changed, so ones she hasn't touched keep updating from the site.
-const LISTING_FIELDS = ['req_number', 'pay', 'work_mode', 'location', 'posted_at'];
+const LISTING_FIELDS = ['req_number', 'pay', 'work_mode', 'location', 'posted_at', 'description'];
 const OWN_TEXT_FIELDS = ['resume_submitted', 'response_date', 'resume_link', 'listing_copy_location', 'callback_chances', 'notes'];
 const OWN_CHECK_FIELDS = ['cover_letter', 'interviewed'];
 
@@ -1016,7 +1315,8 @@ function jobEditHtml(job) {
     const mark = k => edited.includes(k) ? ' <span class="edited" title="You changed this; checks won’t overwrite it">edited</span>' : '';
     const field = (k, label, input) => `<label>${label}${mark(k)} ${input}</label>`;
     const initial = { req_number: job.req_number || '', pay: payNow || '', work_mode: job.work_mode || '',
-                      location: job.location || '', posted_at: (job.posted_at || '').slice(0, 10) };
+                      location: job.location || '', posted_at: (job.posted_at || '').slice(0, 10),
+                      description: job.description || '' };
     return `
         <div class="job-edit" data-initial="${esc(JSON.stringify(initial))}" id="edit-${id}">
             <div class="job-edit-head">
@@ -1044,6 +1344,7 @@ function jobEditHtml(job) {
                     <span class="link-row"><input id="e-resume_link-${id}" value="${v('resume_link')}" placeholder="https://…">
                     ${safeUrl(job.resume_link) ? `<a href="${safeUrl(job.resume_link)}" target="_blank" rel="noopener noreferrer">Open ↗</a>` : ''}</span></label>
                 <label class="wide">Job listing copy location <input id="e-listing_copy_location-${id}" maxlength="100" value="${v('listing_copy_location')}"></label>
+                ${field('description', 'Job description', `<textarea id="e-description-${id}" class="desc-edit" rows="8">${v('description')}</textarea>`).replace('<label>', '<label class="wide">')}
                 <label class="wide">Chances of a call back &amp; why <textarea id="e-callback_chances-${id}" maxlength="250">${v('callback_chances')}</textarea></label>
                 <label class="wide">Notes <textarea id="e-notes-${id}">${v('notes')}</textarea></label>
             </div>
@@ -1088,7 +1389,9 @@ async function saveJobDetails(jobId) {
     const body = {};
     OWN_TEXT_FIELDS.forEach(n => { body[n] = el(n).value; });
     OWN_CHECK_FIELDS.forEach(n => { body[n] = el(n).checked; });
-    LISTING_FIELDS.forEach(n => { if (el(n).value.trim() !== String(initial[n]).trim()) body[n] = el(n).value; });
+    // Only send listing fields she changed (spacing and line endings don't count as a change).
+    const same = (a, b) => String(a).replace(/\s+/g, ' ').trim() === String(b).replace(/\s+/g, ' ').trim();
+    LISTING_FIELDS.forEach(n => { if (!same(el(n).value, initial[n])) body[n] = el(n).value; });
     try {
         await api(`/api/jobs/${jobId}`, { method: 'PATCH', body });
         await loadJobs();

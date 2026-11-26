@@ -138,6 +138,23 @@ CREATE TABLE IF NOT EXISTS search_jobs (
     PRIMARY KEY (search_id, job_id)
 );
 
+-- How well a job matches her (see ranking.py). The AI fills skills/interests from her resume
+-- and interests; ai_hash says what it read, so it's redone only when something changes.
+-- *_override are scores she set herself (0-100); they win over the calculated ones.
+CREATE TABLE IF NOT EXISTS job_match (
+    job_id             INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+    ai_hash            TEXT,
+    skills_score       REAL,
+    interests_score    REAL,
+    details_json       TEXT,
+    scored_at          TEXT,
+    skills_override    REAL,
+    interests_override REAL,
+    salary_override    REAL,
+    benefits_override  REAL,
+    commute_override   REAL
+);
+
 -- Certifications and tools a listing asks for (read by AI; see skills.py).
 -- skill_key groups spellings ("PowerBI", "Microsoft Power BI" -> "power bi").
 CREATE TABLE IF NOT EXISTS job_skills (
@@ -177,7 +194,11 @@ LISTING_EDITS = {
     "work_mode": ("work_mode", "work_mode_source", "is_remote"),
     "location": ("location",),
     "posted_at": ("posted_at",),
+    "description": ("description",),
 }
+MAX_DESCRIPTION = 50000
+# Shorter than this counts as "no description" (too little for skills or match scoring to read).
+MIN_DESCRIPTION = 200
 EDITABLE_JOB_FIELDS = ("status", "notes", "interest_level", *APPLICATION_FIELDS)
 # How much she wants a job she's marked Interested or Applied.
 INTEREST_LEVELS = ("high", "medium", "low")
@@ -683,6 +704,9 @@ def save_results(results, search_id=None, company_id=None):
                     "title", "company", "location", "is_remote", "employment_type", "posted_at",
                     "salary_min", "salary_max", "salary_period", "salary_text", "req_number", "closes_at",
                     "work_mode", "work_mode_source", "apply_link", "publisher", "description", "raw_json")}
+                # A result without a description never blanks out one already saved (from Reload or by hand).
+                if not (refresh.get("description") or "").strip():
+                    refresh.pop("description")
                 # Details she corrected by hand stay as she set them.
                 edited = conn.execute("SELECT edited_fields FROM jobs WHERE id = ?", (row_id,)).fetchone()["edited_fields"]
                 for name in json.loads(edited or "[]"):
@@ -731,12 +755,14 @@ JOB_SORTS = {
 
 
 def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_only=False,
-              hide_not_fit=False, sort="found", work_mode=None, interest=None, skill=None):
+              hide_not_fit=False, sort="found", work_mode=None, interest=None, skill=None,
+              no_description=False):
     sql = ["SELECT j.id, j.company_id, j.title, j.company, j.location, j.is_remote, j.employment_type,",
            "j.posted_at, j.salary_min, j.salary_max, j.salary_period, j.salary_text,",
            "j.req_number, j.closes_at, j.applied_at, j.work_mode, j.work_mode_source, j.interest_level,",
            "j.added_by_hand, j.found_where,",
-           "j.apply_link, j.publisher, j.status, j.notes, j.first_seen_at, j.last_seen_at",
+           "j.apply_link, j.publisher, j.status, j.notes, j.first_seen_at, j.last_seen_at,",
+           f"length(COALESCE(j.description, '')) >= {MIN_DESCRIPTION} AS has_description",
            "FROM jobs j"]
     where, args = [], []
     if search_id:
@@ -766,6 +792,8 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     if skill:
         where.append("EXISTS (SELECT 1 FROM job_skills s WHERE s.job_id = j.id AND s.skill_key = ?)")
         args.append(skill)
+    if no_description:
+        where.append(f"length(COALESCE(j.description, '')) < {MIN_DESCRIPTION}")
     if text:
         where.append("(j.title LIKE ? OR j.company LIKE ? OR j.description LIKE ? OR j.notes LIKE ?"
                      " OR j.req_number LIKE ?)")
@@ -776,6 +804,74 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     with connect() as conn:
         rows = conn.execute(" ".join(sql), args).fetchall()
     return [dict(r) for r in rows]
+
+
+MATCH_CRITERIA = ("skills", "interests", "salary", "benefits", "commute")
+
+
+def get_profile():
+    """Her resume and interests (text), used to score how well jobs match her."""
+    return {"resume": _get_meta("profile_resume") or "", "interests": _get_meta("profile_interests") or ""}
+
+
+def set_profile(resume=None, interests=None):
+    if resume is not None:
+        _set_meta("profile_resume", resume.strip()[:60000])
+    if interests is not None:
+        _set_meta("profile_interests", interests.strip()[:10000])
+
+
+def get_matches(job_ids=None):
+    """{job id: job_match row as a dict (details parsed)}."""
+    sql, args = "SELECT * FROM job_match", ()
+    if job_ids is not None:
+        ids = list(job_ids)
+        if not ids:
+            return {}
+        sql += f" WHERE job_id IN ({','.join('?' * len(ids))})"
+        args = ids
+    with connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    out = {}
+    for r in rows:
+        d = dict(r)
+        d["details"] = json.loads(d.pop("details_json") or "{}")
+        out[r["job_id"]] = d
+    return out
+
+
+def save_match_ai(job_id, ai_hash, skills_score, interests_score, details):
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO job_match (job_id, ai_hash, skills_score, interests_score, details_json, scored_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET ai_hash = excluded.ai_hash, "
+            "skills_score = excluded.skills_score, interests_score = excluded.interests_score, "
+            "details_json = excluded.details_json, scored_at = excluded.scored_at",
+            (job_id, ai_hash, skills_score, interests_score, json.dumps(details), now_iso()))
+
+
+def set_match_overrides(job_id, overrides):
+    """Scores she set herself: {criterion: 0-100, or None/"" to go back to the calculated score}."""
+    sets, args = [], []
+    for name, value in overrides.items():
+        if name not in MATCH_CRITERIA:
+            raise ValueError(f"Unknown score: {name}")
+        if value in (None, ""):
+            value = None
+        else:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                raise ValueError("Scores must be numbers from 0 to 100")
+            if not 0 <= value <= 100:
+                raise ValueError("Scores must be numbers from 0 to 100")
+        sets.append(f"{name}_override = ?")
+        args.append(value)
+    if not sets:
+        return
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO job_match (job_id) VALUES (?)", (job_id,))
+        conn.execute(f"UPDATE job_match SET {', '.join(sets)} WHERE job_id = ?", (*args, job_id))
 
 
 def jobs_needing_skills(min_chars=200):
@@ -964,6 +1060,11 @@ def _listing_edit_columns(name, value):
         return {"location": _clean_value("location", "text", 200, value)}
     if name == "posted_at":
         return {"posted_at": _clean_value("date posted", "date", None, value)}
+    if name == "description":
+        text = re.sub(r"\n{3,}", "\n\n", (value or "").replace("\r\n", "\n")).strip()
+        if len(text) > MAX_DESCRIPTION:
+            raise ValueError(f"The description is too long (over {MAX_DESCRIPTION:,} characters)")
+        return {"description": text or None}
     if name == "work_mode":
         mode = (value or "").strip().lower() or None
         if mode in ("unknown", "none"):

@@ -18,6 +18,16 @@ A small Flask app for running job searches on demand and tracking the results in
 
 The database (`jobs.db`) is created on first run and loaded with the starter companies and searches. The server reloads itself when Python files change, so refreshing the page is enough to pick up edits.
 
+## Ranking Interested jobs
+
+Paste her resume (or load a .docx/.txt) and her interests in the **Ranking Interested jobs** card, then
+click **Score**. Each Interested job gets a 0-100 match score from five parts, weighted by importance:
+skills & qualifications ×5 and interests ×4 (ChatGPT compares the listing with her resume and interests),
+salary ×3 (ranked against the other Interested jobs), benefits ×2 (the company's benefit scores) and
+commute ×1 (remote best, then distance from home). Anything unknown counts as 50. Open a job to see the
+breakdown, what she meets or is missing, and to set her own score for any part. Sort by **Best match**
+to rank them. The resume and interests stay in her local database.
+
 ## ChatGPT or Claude
 
 Each AI step uses the service that did it best in a side-by-side test:

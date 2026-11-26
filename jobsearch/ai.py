@@ -3,7 +3,8 @@
 Each task uses the AI that did it best in a side-by-side test (compare_ai.py):
   * "listings" - reading job listings into fields: ChatGPT (the two were about even; uses the OpenAI balance).
   * "benefits" - benefits lookups (reading benefits pages, web search): Claude (found real figures with quotes).
-Change either in .env with AI_LISTINGS=openai|claude and AI_BENEFITS=openai|claude. If the chosen one's
+  * "matching" - scoring a job against her resume and interests (ranking.py): ChatGPT for now.
+Change any of them in .env with AI_LISTINGS / AI_BENEFITS / AI_MATCHING = openai|claude. If the chosen one's
 key (OPENAI_API_KEY / ANTHROPIC_API_KEY) isn't in .env, the other one is used, so a laptop with only
 an OpenAI key keeps working.
 
@@ -15,7 +16,8 @@ import os
 import re
 
 PROVIDERS = {"openai": ("ChatGPT", "OPENAI_API_KEY"), "claude": ("Claude", "ANTHROPIC_API_KEY")}
-TASK_DEFAULTS = {"listings": ("AI_LISTINGS", "openai"), "benefits": ("AI_BENEFITS", "claude")}
+TASK_DEFAULTS = {"listings": ("AI_LISTINGS", "openai"), "benefits": ("AI_BENEFITS", "claude"),
+                 "matching": ("AI_MATCHING", "openai")}
 _override = None  # set by using() for side-by-side comparisons
 
 

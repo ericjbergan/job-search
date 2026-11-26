@@ -9,7 +9,7 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import ai, benefits, boards, db, geo, importer, jobhunt, jsearch, skills
+from jobsearch import ai, benefits, boards, db, geo, importer, jobhunt, jsearch, ranking, ranking_files, skills
 from jobsearch.pay import format_pay
 
 app = Flask(__name__)
@@ -282,12 +282,73 @@ def api_list_jobs():
         work_mode=request.args.get("work_mode") or None,
         interest=request.args.get("interest") or None,
         skill=request.args.get("skill") or None,
+        no_description=request.args.get("no_description") == "1",
     )
     # Flag jobs whose employer is already a saved company (by name, so job-board results count too).
     saved = {benefits.company_key(c["name"]): c["id"] for c in db.list_companies()}
     for j in jobs:
         j["saved_company_id"] = j.get("company_id") or saved.get(benefits.company_key(j.get("company") or ""))
+    # Match scores for Interested jobs (what the ranking compares), and the "Best match" sort.
+    if any(j["status"] == "interested" for j in jobs):
+        scored = ranking.rank("interested")["jobs"]
+        for j in jobs:
+            r = scored.get(j["id"])
+            j["match_score"] = r["score"] if r else None
+    if request.args.get("sort") == "match":
+        jobs.sort(key=lambda j: (j.get("match_score") is None, -(j.get("match_score") or 0)))
     return jsonify(jobs)
+
+
+# --- ranking her Interested jobs ------------------------------------------------------------
+
+@app.route("/api/profile", methods=["GET", "POST"])
+def api_profile():
+    """Her resume and interests (kept in her own database, used for match scores)."""
+    if request.method == "POST":
+        data = request.get_json() or {}
+        db.set_profile(resume=data.get("resume"), interests=data.get("interests"))
+    return jsonify(db.get_profile())
+
+
+@app.route("/api/profile/resume_file", methods=["POST"])
+def api_profile_resume_file():
+    """Pull the text out of an uploaded resume (.docx or .txt) so it can be checked before saving."""
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return _error("Choose the resume file")
+    try:
+        text = ranking_files.resume_text(upload.filename, upload.read())
+    except ValueError as e:
+        return _error(str(e))
+    return jsonify({"text": text})
+
+
+@app.route("/api/ranking")
+def api_ranking():
+    return jsonify(ranking.rank("interested"))
+
+
+@app.route("/api/ranking/score", methods=["POST"])
+def api_ranking_score():
+    """Have the AI score a batch of Interested jobs (the page repeats this until none are left)."""
+    try:
+        result = ranking.score_pending("interested")
+    except ai.AIError as e:
+        return _error(str(e))
+    return jsonify({**result, "ranking": ranking.rank("interested")})
+
+
+@app.route("/api/jobs/<int:job_id>/match", methods=["GET", "PATCH"])
+def api_job_match(job_id):
+    """One job's match breakdown; PATCH sets her own scores ({"skills": 80, "commute": ""} ...)."""
+    if not db.get_job(job_id):
+        return _error("Job not found", 404)
+    if request.method == "PATCH":
+        try:
+            db.set_match_overrides(job_id, request.get_json() or {})
+        except ValueError as e:
+            return _error(str(e))
+    return jsonify(ranking.rank("interested")["jobs"].get(job_id))
 
 
 @app.route("/api/jobs/<int:job_id>/reload", methods=["POST"])
