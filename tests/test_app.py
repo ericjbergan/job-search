@@ -1998,3 +1998,45 @@ class TailorTests(FreshDbTest):
         r = self.client.post(f"/api/jobs/{jid}/tailor")
         self.assertEqual(r.status_code, 400)
         self.assertIn("no description", r.get_json()["error"])
+
+
+class SetupCheckTests(unittest.TestCase):
+    """New packages from an update get installed when the app starts or restarts itself."""
+
+    def setUp(self):
+        from jobsearch import setup_check
+        self.sc = setup_check
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.req, self.marker = os.path.join(self.dir, "requirements.txt"), os.path.join(self.dir, ".marker")
+        with open(self.req, "w") as f:
+            f.write("# comment\nFlask>=2.2,<4\npython-dotenv>=1.0\n")
+        for name, value in (("REQUIREMENTS", self.req), ("MARKER", self.marker)):
+            p = mock.patch.object(setup_check, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_installs_after_an_update_then_not_again(self):
+        calls = []
+        ok = lambda cmd, timeout: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0)
+        self.assertTrue(self.sc.install_if_needed(run=ok, log=lambda m: None))      # no marker yet: install
+        self.assertIn("-r", calls[0])
+        self.assertFalse(self.sc.install_if_needed(run=ok, log=lambda m: None))     # same file: nothing to do
+        with open(self.req, "a") as f:
+            f.write("playwright>=1.45,<2\n")
+        with mock.patch.object(self.sc, "missing_packages", return_value=[]):
+            self.assertTrue(self.sc.install_if_needed(run=ok, log=lambda m: None))  # file changed: install
+        self.assertEqual(len(calls), 2)
+
+    def test_missing_package_installs_and_falls_back_to_user(self):
+        shutil.copyfile(self.req, self.marker)
+        calls = []
+        first_fails = lambda cmd, timeout: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0 if "--user" in cmd else 1)
+        with mock.patch.object(self.sc, "missing_packages", return_value=["playwright"]):
+            self.assertTrue(self.sc.install_if_needed(run=first_fails, log=lambda m: None))
+        self.assertEqual(["--user" in c for c in calls], [False, True])
+
+    def test_reads_package_names(self):
+        self.assertEqual(self.sc.missing_packages("Flask>=2\npython-dotenv>=1\n# x\n"), [])
+        self.assertEqual(self.sc.missing_packages("surely-not-installed-pkg>=1\n"), ["surely-not-installed-pkg"])
+

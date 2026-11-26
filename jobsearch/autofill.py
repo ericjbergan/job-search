@@ -535,8 +535,9 @@ def _context():
         from playwright.sync_api import sync_playwright
     except ImportError:
         raise FillError("Fill application isn't set up on this computer yet (the 'playwright' package is "
-                        "missing). Close the app, double-click setup.bat in the job-search folder, then start "
-                        "the app again.")
+                        "missing). Close the Job Search window, then start the app again from its desktop "
+                        "shortcut: it installs what's missing as it starts (give it a minute). If this message "
+                        "comes back, double-click setup.bat in the job-search folder.")
     if _browser["pw"] is None:
         _browser["pw"] = sync_playwright().start()
     errors = []

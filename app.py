@@ -801,6 +801,10 @@ def api_backup():
 
 
 if __name__ == "__main__":
+    # A pulled update may add a package: install it here, since the app restarts itself on code changes
+    # and the start shortcut (which also installs) doesn't run then.
+    from jobsearch import setup_check
+    setup_check.install_if_needed()
     # Auto-restart on Python file changes so a page refresh picks them up.
     # The reloader is separate from debug mode, which stays off (its console is an RCE vector).
     app.run(debug=False, use_reloader=True, port=PORT)
