@@ -5,12 +5,14 @@ Each task uses the AI that did it best in a side-by-side test (compare_ai.py):
   * "benefits" - benefits lookups (reading benefits pages, web search): Claude (found real figures with quotes).
   * "matching" - scoring a job against her resume and interests (ranking.py): Claude Sonnet (read her
     resume accurately and judged each job's mix of work; ChatGPT missed tools on her resume and used a template).
-Change any of them in .env with AI_LISTINGS / AI_BENEFITS / AI_MATCHING = openai|claude. If the chosen one's
+  * "applications" - answering application form questions (autofill.py): Claude Sonnet, same model as matching
+    (it drafts answers in her voice from her resume).
+Change any of them in .env with AI_LISTINGS / AI_BENEFITS / AI_MATCHING / AI_APPLICATIONS = openai|claude. If the chosen one's
 key (OPENAI_API_KEY / ANTHROPIC_API_KEY) or package isn't there, the other one is used, so a laptop with only
 an OpenAI key keeps working.
 
 Models can be changed in .env: OPENAI_MODEL, CLAUDE_MODEL (reading text), CLAUDE_WEB_MODEL (web search),
-CLAUDE_MATCHING_MODEL (job scoring).
+CLAUDE_MATCHING_MODEL (job scoring and application answers).
 """
 
 import contextlib
@@ -21,7 +23,7 @@ import re
 
 PROVIDERS = {"openai": ("ChatGPT", "OPENAI_API_KEY"), "claude": ("Claude", "ANTHROPIC_API_KEY")}
 TASK_DEFAULTS = {"listings": ("AI_LISTINGS", "openai"), "benefits": ("AI_BENEFITS", "claude"),
-                 "matching": ("AI_MATCHING", "claude")}
+                 "matching": ("AI_MATCHING", "claude"), "applications": ("AI_APPLICATIONS", "claude")}
 # Claude models that can hand a declined request to another model (server-side fallback).
 _FALLBACK_MODELS = ("claude-sonnet-5-5", "claude-opus-5-5")
 _override = None  # set by using() for side-by-side comparisons
@@ -104,7 +106,7 @@ def claude_web_model():
 
 def claude_model_for(task):
     """Job scoring gets the stronger model (judgment about her fit); reading text uses the light one."""
-    if task == "matching":
+    if task in ("matching", "applications"):
         return (os.getenv("CLAUDE_MATCHING_MODEL") or "claude-sonnet-5-5")
     return claude_model()
 

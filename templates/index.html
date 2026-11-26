@@ -214,6 +214,57 @@
                 </div>
             </section>
 
+            <section class="panel collapsible" id="applyInfoPanel">
+                <div class="panel-head">
+                    <h2 class="collapse-toggle" onclick="togglePanel('applyInfoPanel')" title="Show or hide">
+                        <span class="chev">▾</span> Application info</h2>
+                </div>
+                <div class="panel-body">
+                    <p class="hint">Used by <b>Fill application</b> (in an open job) to fill in application forms.
+                        Kept in this app's database only. Phone, email and street address are typed into the form
+                        directly and never sent to the AI; the rest helps the AI pick answers.</p>
+                    <div class="apply-grid">
+                        <label>First name <input id="aFirst_name"></label>
+                        <label>Last name <input id="aLast_name"></label>
+                        <label>Preferred name <input id="aPreferred_name" placeholder="if different"></label>
+                        <label>Email <input id="aEmail" type="email"></label>
+                        <label>Phone <input id="aPhone" type="tel"></label>
+                        <label class="wide">Street address <input id="aStreet"></label>
+                        <label>City <input id="aCity"></label>
+                        <label>State <input id="aState" placeholder="OH"></label>
+                        <label>ZIP <input id="aZip"></label>
+                        <label>Country <input id="aCountry" placeholder="United States"></label>
+                        <label class="wide">LinkedIn <input id="aLinkedin" placeholder="https://www.linkedin.com/in/…"></label>
+                        <label class="wide">Website / portfolio <input id="aWebsite"></label>
+                        <label>Authorized to work in the US?
+                            <select id="aWork_authorized"><option value=""></option><option>Yes</option><option>No</option></select></label>
+                        <label>Needs visa sponsorship?
+                            <select id="aSponsorship"><option value=""></option><option>No</option><option>Yes</option></select></label>
+                        <label>Willing to relocate?
+                            <select id="aRelocate"><option value=""></option><option>No</option><option>Yes</option><option>Depends on the job</option></select></label>
+                        <label>Earliest start <input id="aStart_date" placeholder="e.g. Two weeks after an offer"></label>
+                        <label class="wide">Desired salary answer <input id="aSalary" placeholder="e.g. Open to discussing; $125,000+"></label>
+                        <label class="wide">How did you hear about us? <input id="aHear_about" placeholder="e.g. LinkedIn, company website"></label>
+                    </div>
+                    <p class="hint interests-hint">Voluntary (EEO) questions. "Decline to answer" picks the form's
+                        decline option.</p>
+                    <div class="apply-grid">
+                        <label>Gender <select id="aGender"><option>Decline to answer</option><option>Female</option><option>Male</option><option>Non-binary</option></select></label>
+                        <label>Hispanic or Latino? <select id="aHispanic"><option>Decline to answer</option><option>No</option><option>Yes</option></select></label>
+                        <label>Race <select id="aRace"><option>Decline to answer</option><option>White</option><option>Black or African American</option><option>Asian</option><option>American Indian or Alaska Native</option><option>Native Hawaiian or Other Pacific Islander</option><option>Two or more races</option></select></label>
+                        <label>Veteran status <select id="aVeteran"><option>Decline to answer</option><option>I am not a protected veteran</option><option>I am a protected veteran</option></select></label>
+                        <label>Disability <select id="aDisability"><option>Decline to answer</option><option>No, I do not have a disability</option><option>Yes, I have a disability</option></select></label>
+                    </div>
+                    <label>Anything else the AI should know when answering (optional)
+                        <textarea id="aExtra" rows="2" placeholder="e.g. Bachelor's in Business, Ohio State, 2012. Prefers hybrid."></textarea>
+                    </label>
+                    <div class="buttons">
+                        <button type="button" class="small" onclick="saveApplyInfo(this)">Save</button>
+                    </div>
+                    <span class="hint" id="aResumeHint"></span>
+                </div>
+            </section>
+
             <section class="panel collapsible" id="skillsPanel">
                 <div class="panel-head">
                     <h2 class="collapse-toggle" onclick="togglePanel('skillsPanel')" title="Show or hide">
@@ -325,6 +376,20 @@
 
             <div id="bFacts"></div>
         </div>
+    </div>
+
+    <div id="fillBar" class="fill-bar hidden">
+        <div class="fill-head">
+            <b>Fill application</b> <span id="fillJob"></span>
+            <button type="button" class="fill-x" title="Close the filler window" onclick="closeFiller()">✕</button>
+        </div>
+        <p class="hint">In the window that opened: click Apply and sign in if the site asks. On each page of the
+            form, click <b>Fill this page</b>, check everything (orange = drafted by the AI), then go on to the next
+            page. Submitting is up to you.</p>
+        <div class="buttons">
+            <button type="button" id="fillBtn" onclick="fillPage(this)">Fill this page</button>
+        </div>
+        <div id="fillResult" class="fill-result"></div>
     </div>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>

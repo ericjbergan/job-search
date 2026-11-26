@@ -38,6 +38,15 @@ def profile_dir():
     return os.getenv("JOBSEARCH_PROFILE_DIR") or PROFILE_DIR
 
 
+def resume_path():
+    """Her resume file in profile/ (what Fill application uploads), or None."""
+    for name in RESUME_NAMES:
+        path = os.path.join(profile_dir(), name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def read_resume():
     """Resume text from profile/, or None if there's no resume file."""
     for name in RESUME_NAMES:

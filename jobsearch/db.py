@@ -860,6 +860,25 @@ def set_profile(**fields):
             _set_meta(f"profile_{name}", str(value).strip()[:PROFILE_FIELDS[name]])
 
 
+# Her details for filling in job applications (Fill application). Kept in this database only.
+APPLY_INFO_FIELDS = {"first_name": 100, "last_name": 100, "preferred_name": 100, "email": 200, "phone": 50,
+                     "street": 200, "city": 100, "state": 100, "zip": 20, "country": 100,
+                     "linkedin": 300, "website": 300, "work_authorized": 20, "sponsorship": 20,
+                     "relocate": 50, "start_date": 100, "salary": 200, "hear_about": 200,
+                     "gender": 50, "hispanic": 50, "race": 100, "veteran": 100, "disability": 50,
+                     "extra": 5000}
+
+
+def get_apply_info():
+    return {name: _get_meta(f"apply_{name}") or "" for name in APPLY_INFO_FIELDS}
+
+
+def set_apply_info(**fields):
+    for name, value in fields.items():
+        if name in APPLY_INFO_FIELDS and value is not None:
+            _set_meta(f"apply_{name}", str(value).strip()[:APPLY_INFO_FIELDS[name]])
+
+
 def get_matches(job_ids=None):
     """{job id: job_match row as a dict (details parsed)}."""
     sql, args = "SELECT * FROM job_match", ()

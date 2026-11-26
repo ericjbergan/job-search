@@ -1,6 +1,7 @@
 """Job Search web UI: run JSearch queries on demand and track the results."""
 
 import os
+import re
 from datetime import date
 
 from dotenv import load_dotenv
@@ -9,7 +10,7 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import (ai, benefits, boards, db, geo, importer, jobhunt, jsearch, profile_files, ranking,
+from jobsearch import (ai, autofill, benefits, boards, db, geo, importer, jobhunt, jsearch, profile_files, ranking,
                        ranking_files, skills)
 from jobsearch.pay import format_pay
 
@@ -638,6 +639,88 @@ def api_update_job(job_id):
     except ValueError as e:
         return _error(str(e))
     return jsonify(db.get_job(job_id))
+
+
+# --- fill application -------------------------------------------------------
+
+def apply_info_suggestions():
+    """Name, email, phone and city from the top of her resume, to start an empty Application info card."""
+    resume = db.get_profile().get("resume") or ""
+    lines = [l.strip() for l in resume.splitlines() if l.strip()][:8]
+    found = {}
+    name = lines[0].split(",")[0].strip() if lines else ""  # "Jane Doe, CBAP" -> "Jane Doe"
+    if re.fullmatch(r"[A-Za-z][A-Za-z.'-]*(\s+[A-Za-z][A-Za-z.'-]*){1,3}", name):
+        parts = name.split()
+        found["first_name"], found["last_name"] = parts[0].title(), parts[-1].title()
+    top = "\n".join(lines)
+    m = re.search(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", top)
+    if m:
+        found["email"] = m.group(0)
+    m = re.search(r"\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b", top)
+    if m:
+        found["phone"] = m.group(0)
+    m = re.search(r"\b([A-Z][a-zA-Z.]+(?: [A-Z][a-zA-Z.]+)*),\s*([A-Z]{2})\b", top)
+    if m:
+        found["city"], found["state"] = m.group(1), m.group(2)
+    return found
+
+
+@app.route("/api/apply_info", methods=["GET", "POST"])
+def api_apply_info():
+    """Her details for filling in applications (kept in her own database)."""
+    if request.method == "POST":
+        data = request.get_json() or {}
+        db.set_apply_info(**{k: data.get(k) for k in db.APPLY_INFO_FIELDS})
+    info = db.get_apply_info()
+    return jsonify({**info, "suggested": {k: v for k, v in apply_info_suggestions().items() if not info.get(k)},
+                    "resume_file": os.path.basename(profile_files.resume_path() or "")})
+
+
+@app.route("/api/jobs/<int:job_id>/apply/open", methods=["POST"])
+def api_apply_open(job_id):
+    """Open the job's link in the filler's browser window."""
+    job = db.get_job(job_id)
+    if not job:
+        return _error("Job not found", 404)
+    if not job.get("apply_link"):
+        return _error("This job has no listing link to open")
+    try:
+        url = autofill.open_job(job["apply_link"])
+    except autofill.FillError as e:
+        return _error(str(e))
+    except Exception as e:  # a browser problem: show it rather than a blank 500
+        return _error(f"Fill application hit a problem: {str(e).splitlines()[0] if str(e) else type(e).__name__}", 500)
+    return jsonify({"ok": True, "url": url})
+
+
+@app.route("/api/jobs/<int:job_id>/apply/fill", methods=["POST"])
+def api_apply_fill(job_id):
+    """Fill the application page showing in the filler's window. Never submits it."""
+    job = db.get_job(job_id)
+    if not job:
+        return _error("Job not found", 404)
+    try:
+        result = autofill.fill_page(job, db.get_apply_info(), db.get_profile())
+    except autofill.FillError as e:
+        return _error(str(e))
+    except Exception as e:  # a browser problem: show it rather than a blank 500
+        return _error(f"Fill application hit a problem: {str(e).splitlines()[0] if str(e) else type(e).__name__}", 500)
+    return jsonify(result)
+
+
+@app.route("/api/apply/snapshot", methods=["POST"])
+def api_apply_snapshot():
+    """Save the filler window's page to a local file, to work out why a site isn't filled."""
+    try:
+        return jsonify({"path": autofill.snapshot()})
+    except autofill.FillError as e:
+        return _error(str(e))
+
+
+@app.route("/api/apply/close", methods=["POST"])
+def api_apply_close():
+    autofill.close()
+    return jsonify({"ok": True})
 
 
 # --- backup -----------------------------------------------------------------

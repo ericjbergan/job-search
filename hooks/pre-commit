@@ -3,11 +3,12 @@
 # Installed by setup.bat (git config core.hooksPath hooks).
 #   - databases (jobs.db, demo.db, ...) hold Jen's job-search records
 #   - .env holds API keys; the comparison report and spreadsheets hold her job data
+#   - .browser-* folders hold Fill application's browser profile (her sign-ins to job sites)
 #   - any API key value, whether from .env or one that looks like a key
 
 status=0
 
-bad_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -Ei '(\.db|\.sqlite3?|\.db-journal|\.db-wal|\.db-shm|\.xlsx|\.xls|\.csv)$|(^|/)\.env$|(^|/)ai-comparison\.html$')
+bad_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -Ei '(\.db|\.sqlite3?|\.db-journal|\.db-wal|\.db-shm|\.xlsx|\.xls|\.csv)$|(^|/)\.env$|(^|/)ai-comparison\.html$|(^|/)\.browser-[^/]+/')
 if [ -n "$bad_files" ]; then
     echo "pre-commit: these files hold private data and can't go in the public repo:" >&2
     echo "$bad_files" | sed 's/^/    /' >&2

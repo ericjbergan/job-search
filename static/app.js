@@ -285,7 +285,7 @@ function togglePanel(id, open) {
 }
 
 function restorePanels() {
-    for (const id of ['jsearchPanel', 'companiesPanel', 'profilePanel', 'skillsPanel']) {
+    for (const id of ['jsearchPanel', 'companiesPanel', 'profilePanel', 'applyInfoPanel', 'skillsPanel']) {
         let collapsed = false;
         try { collapsed = localStorage.getItem(`collapsed:${id}`) === '1'; } catch (e) { /* ignore */ }
         document.getElementById(id).classList.toggle('collapsed', collapsed);
@@ -853,6 +853,7 @@ async function openJob(jobId, closeOthers) {
             </label>
             ${apply ? `<a class="apply" href="${apply}" target="_blank" rel="noopener noreferrer">Go to listing ↗</a>` : ''}
             ${apply ? `<button class="small secondary" onclick="reloadJob(${job.id}, this)" title="Read the listing page again to fill in the description and details">Reload from listing</button>` : ''}
+            ${apply ? `<button class="small fill-app-btn" onclick="openFiller(${job.id}, this)" title="Open the listing in a window the app can fill in">Fill application</button>` : ''}
         </div>
         ${isRanked(job) ? `<div class="match-box" id="match-${job.id}"><div class="hint">Loading ranking…</div></div>` : ''}
         ${jobEditHtml(job)}
@@ -1017,6 +1018,7 @@ async function refreshAll() {
     await loadJobs();
     await loadSkills();
     await loadProfile();
+    await loadApplyInfo();
 }
 
 // --- ranking jobs -----------------------------------------------------------------------------------
@@ -1849,4 +1851,116 @@ async function lookupBenefits(button) {
         button.disabled = !state.hasBenefitsAI;
         button.textContent = 'Look up benefits';
     }
+}
+
+
+// --- fill application -------------------------------------------------------------------------------
+// The app opens the job's link in its own browser window (Chrome). She gets to the form, then clicks
+// Fill this page for each page; the server fills what it can and reports what's left. Never submits.
+
+const APPLY_INFO_KEYS = ['first_name', 'last_name', 'preferred_name', 'email', 'phone', 'street', 'city', 'state',
+    'zip', 'country', 'linkedin', 'website', 'work_authorized', 'sponsorship', 'relocate', 'start_date', 'salary',
+    'hear_about', 'gender', 'hispanic', 'race', 'veteran', 'disability', 'extra'];
+const applyBox = key => document.getElementById('a' + key[0].toUpperCase() + key.slice(1));
+
+function fillApplyInfo(info) {
+    const suggested = info.suggested || {};
+    for (const key of APPLY_INFO_KEYS) {
+        const box = applyBox(key);
+        const value = info[key] || suggested[key] || '';
+        if (box.tagName === 'SELECT') {
+            if (!value) { box.selectedIndex = 0; continue; }
+            box.value = value;
+            if (box.value !== value) {  // a saved answer that isn't one of the choices
+                box.add(new Option(value, value));
+                box.value = value;
+            }
+        } else {
+            box.value = value;
+        }
+    }
+    document.getElementById('aResumeHint').textContent = info.resume_file
+        ? `Resume uploads use profile/${info.resume_file}.`
+        : 'No resume file in the profile folder, so resume uploads are left for her.';
+}
+
+async function loadApplyInfo() {
+    fillApplyInfo(await api('/api/apply_info'));
+}
+
+async function saveApplyInfo(button) {
+    button.disabled = true;
+    try {
+        const body = {};
+        for (const key of APPLY_INFO_KEYS) body[key] = applyBox(key).value;
+        fillApplyInfo(await api('/api/apply_info', { method: 'POST', body }));
+        showMessage('Application info saved');
+    } catch (e) {
+        showMessage(e.message, true);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+state.fillJob = null;
+
+async function openFiller(jobId, button) {
+    const card = document.getElementById(`job-${jobId}`);
+    const title = card ? card.querySelector('.job-title').textContent : '';
+    const company = card ? card.querySelector('.job-sub').textContent : '';
+    button.disabled = true;
+    const label = button.textContent;
+    button.textContent = 'Opening…';
+    try {
+        await api(`/api/jobs/${jobId}/apply/open`, { method: 'POST' });
+        state.fillJob = jobId;
+        document.getElementById('fillJob').textContent = `· ${title}${company ? ' at ' + company : ''}`;
+        document.getElementById('fillResult').innerHTML = '';
+        document.getElementById('fillBar').classList.remove('hidden');
+    } catch (e) {
+        showMessage(e.message, true);
+    } finally {
+        button.disabled = false;
+        button.textContent = label;
+    }
+}
+
+function fillList(title, items, cls) {
+    if (!items || !items.length) return '';
+    return `<div class="${cls}"><b>${esc(title)}</b><ul>${items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`;
+}
+
+async function fillPage(button) {
+    if (!state.fillJob) return;
+    const out = document.getElementById('fillResult');
+    button.disabled = true;
+    button.textContent = 'Filling… (long pages can take a few minutes)';
+    try {
+        const r = await api(`/api/jobs/${state.fillJob}/apply/fill`, { method: 'POST' });
+        if (r.empty) {
+            out.innerHTML = '<div class="hint">No form fields on this page yet. Click Apply in the window, then try again.</div>';
+            return;
+        }
+        const filled = r.filled.length + r.drafted.length;
+        const added = Object.entries(r.added || {}).map(([kind, n]) =>
+            `${n} ${kind === 'work' ? 'job' : 'school'}${n === 1 ? '' : 's'}`).join(' and ');
+        out.innerHTML = `
+            <div class="fill-summary">Filled ${filled} field${filled === 1 ? '' : 's'}${r.already ? `; ${r.already} already had answers` : ''}.</div>
+            ${added ? `<div class="hint">Added ${esc(added)} from her resume.</div>` : ''}
+            ${r.note ? `<div class="fill-note">${esc(r.note)}</div>` : ''}
+            ${fillList('Check these (drafted by the AI, orange):', r.drafted, 'fill-drafted')}
+            ${fillList('Still needs you:', [...r.needs_you, ...r.failed], 'fill-needs')}
+            ${fillList('From her Application info (green):', r.filled, 'fill-done')}`;
+    } catch (e) {
+        out.innerHTML = `<div class="fill-note">${esc(e.message)}</div>`;
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Fill this page';
+    }
+}
+
+async function closeFiller() {
+    document.getElementById('fillBar').classList.add('hidden');
+    state.fillJob = null;
+    try { await api('/api/apply/close', { method: 'POST' }); } catch (e) { /* already closed */ }
 }
