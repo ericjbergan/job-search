@@ -1374,6 +1374,15 @@ async function analyzeSkills(button) {
 }
 
 restorePanels();
+// The header stays at the top; the sidebar and results tools stick just below it, so they need its height
+// (it changes if the window is narrow enough for the header to wrap).
+function trackHeaderHeight() {
+    const header = document.querySelector('header');
+    const set = () => document.documentElement.style.setProperty('--header-h', header.offsetHeight + 'px');
+    set();
+    if (window.ResizeObserver) new ResizeObserver(set).observe(header);
+}
+trackHeaderHeight();
 refreshAll().catch(e => showMessage(e.message, true));
 
 

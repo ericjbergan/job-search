@@ -14,7 +14,12 @@ header {
     padding: 12px 24px;
     background: #1f3a5f;
     color: #fff;
+    /* stays at the top while scrolling the results; the tools below stick just under it */
+    position: sticky;
+    top: 0;
+    z-index: 20;
 }
+:root { --header-h: 54px; }  /* set to the header's real height by app.js */
 header h1 { margin: 0; font-size: 22px; }
 .header-right { display: flex; align-items: center; gap: 14px; }
 .usage { font-size: 13px; opacity: 0.85; }
@@ -340,9 +345,9 @@ button.add-btn { background: #1e8e3e; font-size: 14px; font-weight: 600; padding
 button.add-btn:hover { background: #18773a; filter: none; }
 
 /* Tools stay on screen while scrolling the results: the sidebar scrolls on its own,
-   and the add-job / filter / sort bar stays at the top of the results. */
-aside { position: sticky; top: 0; max-height: 100vh; overflow-y: auto; padding-bottom: 8px; }
-.results-tools { position: sticky; top: 0; z-index: 5; background: #f4f5f7; padding: 10px 0 2px;
+   and the add-job / filter / sort bar stays just under the Job Search header. */
+aside { position: sticky; top: var(--header-h); max-height: calc(100vh - var(--header-h)); overflow-y: auto; padding-bottom: 8px; }
+.results-tools { position: sticky; top: var(--header-h); z-index: 5; background: #f4f5f7; padding: 10px 0 2px;
                  margin-top: -10px; max-height: 85vh; overflow-y: auto; box-shadow: 0 6px 6px -6px rgba(0,0,0,0.15); }
 .results-tools .filters { margin-bottom: 8px; }
 @media (max-width: 860px) {
