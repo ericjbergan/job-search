@@ -422,9 +422,7 @@ class BenefitsTests(FreshDbTest):
             {"topic": "retirement_match", "summary": "6% match", "quote": "matches 100% of the first 6% you contribute"},
             {"topic": "pto", "summary": "30 days PTO", "quote": "Employees get 30 days of PTO"},  # not on the page
         ], "scores": {"retirement": 4, "pto": 1, "bonus": None}}
-        fake = mock.MagicMock()
-        fake.chat.completions.create.return_value.choices = [mock.MagicMock(message=mock.MagicMock(content=json.dumps(answer)))]
-        with mock.patch.object(benefits, "_client", return_value=fake):
+        with mock.patch.object(benefits.ai, "json_answer", return_value=json.dumps(answer)):
             data = benefits._from_pages("Acme", [("https://acme.com/benefits", page)])
         self.assertEqual([f["summary"] for f in data["facts"]], ["6% match"])
         self.assertTrue(data["facts"][0]["verified"])
@@ -555,9 +553,7 @@ class FigureQuoteTests(unittest.TestCase):
         answer = {"facts": [], "figures": {"employer_match_pct": 6, "pension": False, "pto_days": 20, "bonus": True},
                   "figure_quotes": {"employer_match_pct": "401(k) 6% match", "pension": "Not provided",
                                     "pto_days": "four weeks paid time off to start", "bonus": "annual bonus up to 15%"}}
-        fake = mock.MagicMock()
-        fake.chat.completions.create.return_value.choices = [mock.MagicMock(message=mock.MagicMock(content=json.dumps(answer)))]
-        with mock.patch.object(benefits, "_client", return_value=fake):
+        with mock.patch.object(benefits.ai, "json_answer", return_value=json.dumps(answer)):
             data = benefits._from_pages("Acme", [("https://acme.com/benefits", page)])
         # pension had no real quote; the bonus quote isn't on the page
         self.assertEqual(data["figures"], {"employer_match_pct": 6, "pto_days": 20})
@@ -832,9 +828,7 @@ class ImportJobTests(FreshDbTest):
         text = "Business Analyst II\nBigCo\nDublin, OH (Hybrid)\n" + "Gather requirements. " * 30
         answer = {"title": "Business Analyst II", "company": "BigCo", "location": "Dublin, OH", "work_style": "hybrid",
                   "pay": "$80,000 - $95,000", "req_number": None, "posted_date": None, "closing_date": None, "employment_type": None}
-        fake = mock.MagicMock()
-        fake.chat.completions.create.return_value.choices = [mock.MagicMock(message=mock.MagicMock(content=json.dumps(answer)))]
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), mock.patch.object(importer.benefits, "_client", return_value=fake):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test", "AI_LISTINGS": "openai"}), mock.patch.object(importer.ai, "json_answer", return_value=json.dumps(answer)):
             job = importer.read_job("https://www.glassdoor.com/job-listing/x", text=text)
         v = db._job_values(job)
         self.assertEqual((v["title"], v["company"], v["work_mode"], v["salary_min"]), ("Business Analyst II", "BigCo", "hybrid", 80000))
@@ -976,9 +970,7 @@ class FillGapsTests(unittest.TestCase):
 
     def run_fill(self, job, answer):
         from jobsearch import importer
-        fake = mock.MagicMock()
-        fake.chat.completions.create.return_value.choices = [mock.MagicMock(message=mock.MagicMock(content=json.dumps(answer)))]
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), mock.patch.object(importer.benefits, "_client", return_value=fake):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test", "AI_LISTINGS": "openai"}), mock.patch.object(importer.ai, "json_answer", return_value=json.dumps(answer)):
             return importer.fill_gaps(job)
 
     def test_fills_only_missing_and_checked_values(self):
@@ -1091,3 +1083,81 @@ class JobHuntImportTests(FreshDbTest):
         r = self.client.post("/api/jobs/import/spreadsheet", data={"file": (io.BytesIO(b"hello"), "notes.txt")},
                              content_type="multipart/form-data")
         self.assertEqual(r.status_code, 400)
+
+
+class AIProviderTests(unittest.TestCase):
+    """The ChatGPT / Claude switch in jobsearch/ai.py (no real calls are made)."""
+
+    def block(self, type_, **kw):
+        return mock.MagicMock(type=type_, **kw)
+
+    BOTH = {"OPENAI_API_KEY": "o", "ANTHROPIC_API_KEY": "a", "AI_LISTINGS": "", "AI_BENEFITS": ""}
+
+    def test_each_task_uses_its_own_ai(self):
+        from jobsearch import ai
+        with mock.patch.dict(os.environ, self.BOTH):
+            # Defaults: ChatGPT reads listings, Claude does benefits.
+            self.assertEqual((ai.name("listings"), ai.name("benefits")), ("ChatGPT", "Claude"))
+            with mock.patch.dict(os.environ, {"AI_LISTINGS": "claude", "AI_BENEFITS": "openai"}):
+                self.assertEqual((ai.provider("listings"), ai.provider("benefits")), ("claude", "openai"))
+            with ai.using("openai"):
+                self.assertEqual(ai.provider("benefits"), "openai")
+            self.assertEqual(ai.provider("benefits"), "claude")
+
+    def test_falls_back_to_the_key_that_is_there(self):
+        from jobsearch import ai
+        with mock.patch.dict(os.environ, {**self.BOTH, "ANTHROPIC_API_KEY": ""}):
+            self.assertEqual((ai.name("benefits"), ai.has_key("benefits")), ("ChatGPT", True))
+
+    def test_missing_key_is_a_clear_error(self):
+        from jobsearch import ai
+        with mock.patch.dict(os.environ, {**self.BOTH, "OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": ""}):
+            with self.assertRaisesRegex(ai.AIError, "OPENAI_API_KEY"):
+                ai.json_answer("x", "y")
+
+    def test_claude_json_answer(self):
+        from jobsearch import ai
+        client = mock.MagicMock()
+        client.messages.create.return_value = mock.MagicMock(
+            stop_reason="end_turn",
+            content=[self.block("thinking"), self.block("text", text='```json\n{"title": "BA"}\n```')])
+        with mock.patch.dict(os.environ, {"AI_LISTINGS": "claude", "AI_BENEFITS": "claude", "ANTHROPIC_API_KEY": "k"}), \
+                mock.patch.object(ai, "_anthropic", return_value=client):
+            reply = ai.json_answer("Read it", "listing text")
+        self.assertEqual(json.loads(ai.first_json_object(reply)), {"title": "BA"})
+        kwargs = client.messages.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], ai.claude_model())
+        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "listing text"}])
+
+    def test_claude_refusal_raises(self):
+        from jobsearch import ai
+        client = mock.MagicMock()
+        client.messages.create.return_value = mock.MagicMock(stop_reason="refusal", content=[])
+        with mock.patch.dict(os.environ, {"AI_LISTINGS": "claude", "AI_BENEFITS": "claude", "ANTHROPIC_API_KEY": "k"}), \
+                mock.patch.object(ai, "_anthropic", return_value=client):
+            with self.assertRaises(ai.AIError):
+                ai.json_answer("Read it", "listing text")
+
+    def test_claude_web_answer_continues_after_pause_and_collects_citations(self):
+        from jobsearch import ai
+        cite = mock.MagicMock(url="https://acme.com/benefits")
+        paused = mock.MagicMock(stop_reason="pause_turn", content=[self.block("server_tool_use")])
+        done = mock.MagicMock(stop_reason="end_turn", content=[self.block("text", text='{"facts": []}', citations=[cite])])
+        client = mock.MagicMock()
+        client.beta.messages.create.side_effect = [paused, done]
+        with mock.patch.dict(os.environ, {"AI_LISTINGS": "claude", "AI_BENEFITS": "claude", "ANTHROPIC_API_KEY": "k"}), \
+                mock.patch.object(ai, "_anthropic", return_value=client):
+            text, cited = ai.web_answer("Find benefits", "Acme benefits?")
+        self.assertEqual((text, cited), ('{"facts": []}', {"https://acme.com/benefits"}))
+        second = client.beta.messages.create.call_args_list[1].kwargs["messages"]
+        self.assertEqual([m["role"] for m in second], ["user", "assistant"])
+
+    def test_benefits_web_lookup_uses_the_switch(self):
+        from jobsearch import benefits
+        answer = {"facts": [{"topic": "pto", "summary": "20 days", "quote": "20 days PTO"}],
+                  "figures": {"pto_days": 20}, "figure_quotes": {"pto_days": "20 days PTO"}}
+        with mock.patch.object(benefits.ai, "web_answer", return_value=(json.dumps(answer), {"https://acme.com/b"})):
+            data = benefits._from_web("Acme")
+        self.assertEqual(data["facts"][0]["source_url"], "https://acme.com/b")
+        self.assertEqual(data["figures"], {"pto_days": 20})
+

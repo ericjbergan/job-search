@@ -18,6 +18,24 @@ A small Flask app for running job searches on demand and tracking the results in
 
 The database (`jobs.db`) is created on first run and loaded with the starter companies and searches. The server reloads itself when Python files change, so refreshing the page is enough to pick up edits.
 
+## ChatGPT or Claude
+
+Each AI step uses the service that did it best in a side-by-side test:
+
+- **Reading listings** (pasted text, filling in missing details): ChatGPT (`OPENAI_API_KEY`). The two were about even.
+- **Benefits lookups** (benefits pages and web search): Claude (`ANTHROPIC_API_KEY`). It found real figures with quotes.
+
+Change either in `.env` with `AI_LISTINGS=openai|claude` and `AI_BENEFITS=openai|claude`. If the chosen
+service's key isn't in `.env`, the other one is used, so a laptop with only an OpenAI key still works.
+Optional model settings: `OPENAI_MODEL` (default gpt-4o-mini), `CLAUDE_MODEL` (default claude-haiku-5-5,
+reads text) and `CLAUDE_WEB_MODEL` (default claude-sonnet-5-5, benefits web search).
+
+To compare the two on the same saved jobs (nothing saved is changed), with both keys in `.env`:
+
+    python compare_ai.py --jobs 10 --benefits "Cardinal Health"
+
+This writes `ai-comparison.html` (git-ignored, since it holds job data) and opens it.
+
 ## API quota
 
 JSearch's free plan has a small monthly allowance with a hard cap (no overage charges). Each search page (~10 jobs) uses one request; the header shows how many pages you've used this month. Direct careers-site checks don't use quota. **Check all** always checks the direct companies and asks before including the JSearch ones (yellow tag).

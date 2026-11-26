@@ -168,7 +168,10 @@ async function loadMeta() {
     state.benefitScales = meta.benefit_scales;
     state.benefitTopicOrder = meta.benefit_topics.map(([key]) => key);
     state.benefitTopics = Object.fromEntries(meta.benefit_topics);
-    state.hasOpenAI = meta.has_openai_key;
+    state.aiName = meta.ai_name || 'ChatGPT';
+    state.hasBenefitsAI = meta.has_benefits_ai;
+    state.benefitsAI = meta.benefits_ai_name || 'ChatGPT';
+    state.benefitsAIKey = meta.benefits_ai_key || 'OPENAI_API_KEY';
     state.aiLookups = meta.ai_lookups_this_month;
     renderStatusTabs(meta.status_counts);
     renderUsage(meta.pages_used_this_month);
@@ -1010,7 +1013,7 @@ async function reloadJob(jobId, button) {
         const changed = [...new Set(r.changed.map(c => names[c] || c))];
         const ai = (r.filled_by_chatgpt || []).filter(f => changed.includes(f));
         showMessage(changed.length
-            ? `Updated from the listing: ${changed.join(', ')}.` + (ai.length ? ` (ChatGPT read ${ai.join(', ')} from the description.)` : '')
+            ? `Updated from the listing: ${changed.join(', ')}.` + (ai.length ? ` (${state.aiName} read ${ai.join(', ')} from the description.)` : '')
             : 'The listing has nothing new for this job.');
     } catch (e) {
         showMessage(e.message, true);
@@ -1215,10 +1218,10 @@ function renderBenefits(record) {
     document.getElementById('bUrl').value = record.benefits_url || '';
 
     const btn = document.getElementById('bLookupBtn');
-    btn.disabled = !state.hasOpenAI;
-    document.getElementById('bLookupHint').textContent = state.hasOpenAI
-        ? `Uses ChatGPT (a few cents with web search) · ${state.aiLookups} lookup${state.aiLookups === 1 ? '' : 's'} this month`
-        : 'Add OPENAI_API_KEY to .env to enable lookups';
+    btn.disabled = !state.hasBenefitsAI;
+    document.getElementById('bLookupHint').textContent = state.hasBenefitsAI
+        ? `Uses ${state.benefitsAI} (a few cents with web search) · ${state.aiLookups} lookup${state.aiLookups === 1 ? '' : 's'} this month`
+        : `Add ${state.benefitsAIKey} to .env to enable lookups`;
 
     const facts = lookup.facts || [];
     if (!record.looked_up_at) {
@@ -1283,7 +1286,7 @@ async function lookupBenefits(button) {
     } catch (e) {
         bMessage(e.message, true);
     } finally {
-        button.disabled = !state.hasOpenAI;
+        button.disabled = !state.hasBenefitsAI;
         button.textContent = 'Look up benefits';
     }
 }

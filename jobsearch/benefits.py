@@ -1,12 +1,12 @@
-"""Company benefits: quick tags from posting text, and a ChatGPT-assisted lookup.
+"""Company benefits: quick tags from posting text, and an AI-assisted lookup (ChatGPT or Claude, see ai.py).
 
 Two levels:
   * tags_from_text(): no AI. Pulls clearly stated benefits ("6% 401(k) match",
     "15 days PTO", "pension") out of a job description.
   * lookup(): finds the company's benefits page(s) by following "benefits" links
-    from the listing and careers site, has ChatGPT pull structured facts from
+    from the listing and careers site, has the AI pull structured facts from
     them (quotes are checked against the page text), and falls back to
-    ChatGPT's web search when no page turns up. Every fact keeps its quote and
+    its web search when no page turns up. Every fact keeps its quote and
     source so the result can be checked rather than trusted.
 
 Scores use the scales from the original Columbus spreadsheet (see SCALES).
@@ -18,7 +18,7 @@ import os
 import re
 from urllib.parse import urljoin, urlparse
 
-from jobsearch import boards
+from jobsearch import ai, boards
 
 # The 1-4 scales from the spreadsheet's ranking columns. 2 means "no info".
 SCALES = {
@@ -33,7 +33,6 @@ TOPICS = {
     "sick": "Sick time", "holidays": "Holidays", "bonus": "Bonus", "parental_leave": "Parental leave",
     "tuition": "Tuition", "health": "Health insurance", "other": "Other",
 }
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 # Filler the model sometimes returns for topics the sources don't cover.
 _NO_INFO = re.compile(r"\b(not (provided|specified|available|mentioned|stated|found|disclosed)|no (specific )?(information|details|data))\b", re.I)
 MAX_PAGE_CHARS = 15000
@@ -155,7 +154,7 @@ def _page_text(page):
     return boards.html_to_text(page)
 
 
-# --- ChatGPT ------------------------------------------------------------------------
+# --- AI (see ai.py) -----------------------------------------------------------------
 
 _INSTRUCTIONS = f"""You extract employee benefits for a job seeker comparing employers.
 Only report what the provided sources explicitly say about this employer's US employee benefits.
@@ -187,32 +186,27 @@ Respond with JSON only:
   "figure_quotes": {{}}}}"""
 
 
-def _client():
-    if not os.getenv("OPENAI_API_KEY"):
-        raise BenefitsError("Missing OPENAI_API_KEY in .env")
-    from openai import OpenAI
-    # Extra retries: some home networks drop the first connection now and then.
-    return OpenAI(max_retries=5)
-
-
 def _parse_json(text):
-    m = re.search(r"\{.*\}", text or "", re.S)
-    if not m:
-        raise BenefitsError("ChatGPT didn't return a usable answer; try again")
+    found = ai.first_json_object(text)
+    if not found:
+        raise BenefitsError(f"{ai.name('benefits')} didn't return a usable answer; try again")
     try:
-        return json.loads(m.group(0))
+        return json.loads(found)
     except ValueError as e:
-        raise BenefitsError("ChatGPT's answer wasn't valid JSON; try again") from e
+        raise BenefitsError(f"{ai.name('benefits')}'s answer wasn't valid JSON; try again") from e
+
+
+def _ask(fn, *args):
+    try:
+        return fn(*args)
+    except ai.AIError as e:
+        raise BenefitsError(str(e))
 
 
 def _from_pages(company, sources):
     """sources: [(url, text)]. Facts whose quote isn't really in the text are dropped."""
     docs = "\n\n".join(f"=== SOURCE: {url}\n{text}" for url, text in sources)
-    resp = _client().chat.completions.create(
-        model=MODEL, temperature=0, response_format={"type": "json_object"},
-        messages=[{"role": "system", "content": _INSTRUCTIONS},
-                  {"role": "user", "content": f"Employer: {company}\n\n{docs}"}])
-    data = _parse_json(resp.choices[0].message.content)
+    data = _parse_json(_ask(ai.json_answer, _INSTRUCTIONS, f"Employer: {company}\n\n{docs}", "benefits"))
     by_url = {url: boards.norm(text) for url, text in sources}
     facts = []
     for f in data.get("facts") or []:
@@ -240,14 +234,11 @@ def _quoted_figures(data, quote_ok):
 
 
 def _from_web(company):
-    resp = _client().responses.create(
-        model=MODEL, tools=[{"type": "web_search"}], instructions=_INSTRUCTIONS,
-        input=(f"Find {company}'s US employee benefits: 401(k) match, pension, vacation/PTO and sick days, "
-               "holidays, bonus, parental leave, tuition. Prefer the employer's own careers/benefits pages, "
-               "then recent reputable sources. Ignore other companies with similar names."))
-    data = _parse_json(resp.output_text)
-    cited = {a.url for o in resp.output if getattr(o, "type", "") == "message"
-             for part in o.content for a in (getattr(part, "annotations", None) or []) if getattr(a, "url", None)}
+    reply, cited = _ask(ai.web_answer, _INSTRUCTIONS, (
+        f"Find {company}'s US employee benefits: 401(k) match, pension, vacation/PTO and sick days, "
+        "holidays, bonus, parental leave, tuition. Prefer the employer's own careers/benefits pages, "
+        "then recent reputable sources. Ignore other companies with similar names."))
+    data = _parse_json(reply)
     for f in data.get("facts") or []:
         f["verified"] = False  # can't check web-search quotes against page text
         if not f.get("source_url") and cited:
@@ -260,7 +251,7 @@ def lookup(company, start_urls=(), benefits_url=None, posting_text=None, use_web
     """Find and summarize a company's benefits.
 
     Returns {"facts", "figures", "scores", "score_reasons", "method", "sources"}; scores are
-    calculated from the figures with calculate_scores(), not chosen by ChatGPT.
+    calculated from the figures with calculate_scores(), not chosen by the AI.
     """
     sources = []
     if benefits_url:

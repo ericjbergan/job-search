@@ -4,7 +4,7 @@ read_job(url) recognizes the careers platform from the link and reads that one j
 the way the company-check connectors do (Workday, Oracle, Greenhouse, Lever, Ashby,
 UKG, ADP, Dayforce, DirectEmployers). Other pages are read from the standard job data
 many careers sites embed (schema.org JobPosting). When a page has neither, the page
-text (or text she pasted) goes to ChatGPT to pull out the title, company, location
+text (or text she pasted) goes to the AI (ChatGPT or Claude) to pull out the title, company, location
 and so on; the text itself becomes the description.
 
 Big job boards (Indeed, Glassdoor, LinkedIn, ZipRecruiter) refuse automated requests,
@@ -17,7 +17,7 @@ import os
 import re
 from urllib.parse import parse_qs, urlparse
 
-from jobsearch import benefits, boards
+from jobsearch import ai, benefits, boards
 
 _BLOCKING_SITES = ("indeed.com", "glassdoor.com", "linkedin.com", "ziprecruiter.com", "monster.com", "simplyhired.com")
 MAX_TEXT = 15000
@@ -212,7 +212,7 @@ def _jsonld(url, page):
     return job
 
 
-# --- ChatGPT fallback ------------------------------------------------------------
+# --- AI fallback (ChatGPT or Claude) ---------------------------------------------
 
 _EXTRACT = """From this job listing text, return JSON with these fields (null when the text doesn't say):
 {"title": "", "company": "", "location": "city, state (or several separated by ;)",
@@ -225,15 +225,14 @@ def _from_text(url, text):
     text = re.sub(r"\n{3,}", "\n\n", (text or "").strip())[:MAX_TEXT]
     if len(text) < 200:
         raise ImportFailed("There isn't enough listing text to read. Copy the whole job description and paste it in.")
-    if not os.getenv("OPENAI_API_KEY"):
-        raise ImportFailed("Reading pasted text needs OPENAI_API_KEY in .env")
-    resp = benefits._client().chat.completions.create(
-        model=benefits.MODEL, temperature=0, response_format={"type": "json_object"},
-        messages=[{"role": "system", "content": _EXTRACT}, {"role": "user", "content": text}])
+    if not ai.has_key():
+        raise ImportFailed(f"Reading pasted text needs {ai.key_name()} in .env")
     try:
-        d = json.loads(resp.choices[0].message.content)
+        d = json.loads(ai.first_json_object(ai.json_answer(_EXTRACT, text)) or "")
+    except ai.AIError as e:
+        raise ImportFailed(str(e))
     except ValueError:
-        raise ImportFailed("ChatGPT's answer couldn't be read; try again")
+        raise ImportFailed(f"{ai.name()}'s answer couldn't be read; try again")
     if not d.get("title"):
         raise ImportFailed("Couldn't find a job title in that text")
     job = boards._job(f"url:{_url_key(url)}" if url else f"text:{hashlib.sha1(text.encode()).hexdigest()[:16]}",
@@ -241,7 +240,7 @@ def _from_text(url, text):
                       publisher=_site_name(url) if url else "Added by hand", description=text,
                       employment_type=d.get("employment_type"), salary=d.get("pay"), req=d.get("req_number"),
                       posted=d.get("posted_date"), closes=d.get("closing_date"), work_mode=d.get("work_style"))
-    job["job_read_by_ai"] = True  # already read by ChatGPT; fill_gaps has nothing to add
+    job["job_read_by_ai"] = True  # already read by the AI; fill_gaps has nothing to add
     return job
 
 
@@ -250,19 +249,16 @@ def _digits(text):
 
 
 def fill_gaps(job):
-    """Have ChatGPT read the job's description for details the site's own data left out
+    """Have the AI (ChatGPT or Claude) read the job's description for details the site's own data left out
     (pay, work style, location, dates, reference number, job type). Only empty fields are
     filled, and each value is checked against the text so nothing can be invented.
     Returns the names of what was filled in."""
     text = re.sub(r"\n{3,}", "\n\n", (job.get("job_description") or "").strip())[:MAX_TEXT]
-    if len(text) < 200 or not os.getenv("OPENAI_API_KEY") or job.get("job_read_by_ai"):
+    if len(text) < 200 or not ai.has_key() or job.get("job_read_by_ai"):
         return []
-    resp = benefits._client().chat.completions.create(
-        model=benefits.MODEL, temperature=0, response_format={"type": "json_object"},
-        messages=[{"role": "system", "content": _EXTRACT}, {"role": "user", "content": text}])
     try:
-        d = json.loads(resp.choices[0].message.content)
-    except ValueError:
+        d = json.loads(ai.first_json_object(ai.json_answer(_EXTRACT, text)) or "")
+    except (ai.AIError, ValueError):
         return []
     norm_text, text_digits = boards.norm(text), set(_digits(text))
     filled = []

@@ -19,3 +19,6 @@ venv/
 .vscode/
 .idea/
 .claude/
+
+# Side-by-side AI comparison report (holds her job data)
+ai-comparison.html

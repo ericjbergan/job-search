@@ -10,7 +10,7 @@ from flask import Flask, jsonify, render_template, request
 # Load .env before anything reads credentials.
 load_dotenv()
 
-from jobsearch import benefits, boards, db, geo, importer, jobhunt, jsearch
+from jobsearch import ai, benefits, boards, db, geo, importer, jobhunt, jsearch
 from jobsearch.pay import format_pay
 
 app = Flask(__name__)
@@ -50,7 +50,10 @@ def api_meta():
         "area": dict(zip(("home", "radius_miles"), db.get_area_settings())),
         "pages_used_this_month": db.pages_used_this_month(),
         "has_api_key": bool(os.getenv("JSEARCH_API_KEY")),
-        "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
+        "ai_name": ai.name("listings"),
+        "has_benefits_ai": ai.has_key("benefits"),
+        "benefits_ai_name": ai.name("benefits"),
+        "benefits_ai_key": ai.key_name("benefits"),
         "benefit_scales": benefits.SCALES,
         "benefit_topics": list(benefits.TOPICS.items()),  # a list keeps the display order
         "ai_lookups_this_month": db.ai_calls_this_month(),
@@ -457,7 +460,7 @@ def api_lookup_benefits():
                                  work_mode=job.get("work_mode") if job else "company")
     except benefits.BenefitsError as e:
         return _error(str(e), 502)
-    except Exception as e:  # OpenAI/network errors
+    except Exception as e:  # AI service / network errors
         return _error(f"Benefits lookup failed: {e}", 502)
     db.record_ai_call(result["method"], company)
     fields = {"benefits_url": benefits_url} if benefits_url else {}
