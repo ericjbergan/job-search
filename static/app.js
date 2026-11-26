@@ -854,6 +854,7 @@ async function openJob(jobId, closeOthers) {
             ${apply ? `<a class="apply" href="${apply}" target="_blank" rel="noopener noreferrer">Go to listing ↗</a>` : ''}
             ${apply ? `<button class="small secondary" onclick="reloadJob(${job.id}, this)" title="Read the listing page again to fill in the description and details">Reload from listing</button>` : ''}
             ${apply ? `<button class="small fill-app-btn" onclick="openFiller(${job.id}, this)" title="Open the listing in a window the app can fill in">Fill application</button>` : ''}
+            <button class="small secondary" onclick="openTailor(${job.id})" title="Suggest resume changes for this job (within her real experience)">Tailor resume</button>
         </div>
         ${isRanked(job) ? `<div class="match-box" id="match-${job.id}"><div class="hint">Loading ranking…</div></div>` : ''}
         ${jobEditHtml(job)}
@@ -1956,6 +1957,7 @@ async function fillPage(button) {
         out.innerHTML = `
             <div class="fill-summary">Filled ${filled} field${filled === 1 ? '' : 's'}${r.already ? `; ${r.already} already had answers` : ''}.</div>
             ${added ? `<div class="hint">Added ${esc(added)} from her resume.</div>` : ''}
+            ${r.uploaded ? `<div class="hint">Uploaded ${esc(r.uploaded)}.</div>` : ''}
             ${r.note ? `<div class="fill-note">${esc(r.note)}</div>` : ''}
             ${fillList('Check these (drafted by the AI, orange):', r.drafted, 'fill-drafted')}
             ${fillList('Still needs you:', [...r.needs_you, ...r.failed], 'fill-needs')}
@@ -1972,4 +1974,116 @@ async function closeFiller() {
     document.getElementById('fillBar').classList.add('hidden');
     state.fillJob = null;
     try { await api('/api/apply/close', { method: 'POST' }); } catch (e) { /* already closed */ }
+}
+
+// --- tailor resume ----------------------------------------------------------------------------------
+// Suggested changes to her resume for one job (summary, bullet wording and order, skills order), shown as
+// before -> after so she ticks the ones she wants. Saving writes a Word copy; her own resume isn't changed.
+
+state.tailor = null;
+
+function tailorModal() {
+    let modal = document.getElementById('tailorModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'tailorModal';
+        modal.className = 'rank-modal hidden';
+        modal.onclick = e => { if (e.target === modal) closeTailor(); };
+        document.body.appendChild(modal);
+    }
+    return modal;
+}
+
+function closeTailor() {
+    tailorModal().classList.add('hidden');
+    state.tailor = null;
+}
+
+function tailorShell(jobId, body) {
+    const card = document.getElementById(`job-${jobId}`);
+    const title = card ? card.querySelector('.job-title').textContent : '';
+    const company = card ? card.querySelector('.job-sub').textContent : '';
+    const modal = tailorModal();
+    modal.innerHTML = `<div class="rank-modal-box tailor-box">
+        <div class="rank-modal-head"><h3>Tailor resume</h3>
+            <button class="fill-x" title="Close" onclick="closeTailor()">✕</button></div>
+        <div class="hint">${esc(title)}${company ? ' at ' + esc(company) : ''}</div>
+        <div id="tailorBody">${body}</div></div>`;
+    modal.classList.remove('hidden');
+}
+
+async function openTailor(jobId) {
+    state.tailor = { jobId };
+    tailorShell(jobId, '<p class="hint">Reading the listing and her resume… (about 30 seconds the first time)</p>');
+    try {
+        const r = await api(`/api/jobs/${jobId}/tailor`, { method: 'POST' });
+        if (!state.tailor || state.tailor.jobId !== jobId) return;  // closed meanwhile
+        state.tailor.result = r;
+        renderTailor();
+    } catch (e) {
+        document.getElementById('tailorBody').innerHTML = `<p class="fill-note">${esc(e.message)}</p>`;
+    }
+}
+
+const TAILOR_KINDS = { summary: 'Summary', bullet: 'Bullet', list: 'Skills line' };
+
+function tailorChangeHtml(c, i, checked) {
+    const where = c.type === 'reorder' ? `Bullet order${c.job ? ' · ' + c.job : ''}`
+        : `${TAILOR_KINDS[c.kind] || 'Line'}${c.job ? ' · ' + c.job : ''}`;
+    const warn = c.unsupported && c.unsupported.length
+        ? `<div class="tailor-warn">Not on her resume: ${c.unsupported.map(esc).join(', ')}. Only use this if it's true.</div>` : '';
+    const body = c.type === 'reorder'
+        ? `<ol class="tailor-order">${c.after.map(t => `<li>${esc(t)}</li>`).join('')}</ol>`
+        : `<div class="tailor-before">${esc(c.before)}</div><div class="tailor-after">${esc(c.text)}</div>`;
+    return `<label class="tailor-change">
+        <input type="checkbox" data-i="${i}" ${checked ? 'checked' : ''}>
+        <div><div class="tailor-where"><b>${esc(where)}</b>${c.why ? ` · ${esc(c.why)}` : ''}</div>${warn}${body}</div>
+    </label>`;
+}
+
+function renderTailor() {
+    const r = state.tailor.result;
+    const picked = r.picked ? new Set(r.picked) : null;
+    const checked = (c, i) => picked ? picked.has(i) : !(c.unsupported && c.unsupported.length);
+    const saved = r.saved_path
+        ? `<div class="tailor-saved">Saved for this job: ${esc(r.saved_path.split(/[\\/]/).pop())}
+             <button class="small secondary" onclick="openTailored(${state.tailor.jobId})">Open in Word</button></div>` : '';
+    const changes = r.changes.length
+        ? r.changes.map((c, i) => tailorChangeHtml(c, i, checked(c, i))).join('')
+        : '<p>No changes suggested: her resume already fits this listing well.</p>';
+    const gaps = r.gaps && r.gaps.length
+        ? `<div class="tailor-gaps"><b>The listing asks for these, which her resume doesn't show:</b> ${r.gaps.map(esc).join(', ')}.
+             If she has any of them, add them to her own resume (profile/Resume.docx) first.</div>` : '';
+    document.getElementById('tailorBody').innerHTML = `${saved}
+        <p class="hint">Tick the changes to use. Gray is her resume now, green is the suggestion.
+           Her own resume isn't changed; saving makes a separate Word copy for this job.</p>
+        ${changes}${gaps}
+        <div class="buttons">
+            ${r.changes.length ? '<button type="button" class="add-btn" onclick="saveTailored(this)">Save tailored resume</button>' : ''}
+            <button type="button" class="secondary" onclick="closeTailor()">Close</button>
+        </div>
+        <div id="tailorResult"></div>`;
+}
+
+async function saveTailored(button) {
+    const jobId = state.tailor.jobId;
+    const picked = [...document.querySelectorAll('#tailorBody .tailor-change input:checked')].map(x => Number(x.dataset.i));
+    if (!picked.length) { showMessage('Tick at least one change to save', true); return; }
+    button.disabled = true;
+    try {
+        const r = await api(`/api/jobs/${jobId}/tailor/save`, { method: 'POST', body: { picked } });
+        state.tailor.result.saved_path = r.path;
+        state.tailor.result.picked = picked;
+        renderTailor();
+        document.getElementById('tailorResult').innerHTML = `<p class="tailor-done">Saved <b>${esc(r.name)}</b> in
+            ${esc(r.folder)}. Fill application will upload this version for this job.</p>`;
+    } catch (e) {
+        showMessage(e.message, true);
+        button.disabled = false;
+    }
+}
+
+async function openTailored(jobId) {
+    try { await api(`/api/jobs/${jobId}/tailor/open`, { method: 'POST' }); }
+    catch (e) { showMessage(e.message, true); }
 }

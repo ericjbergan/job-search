@@ -53,5 +53,8 @@ edit tell Eric to **refresh the page**; mention a restart only when one is reall
 - Fill application (`jobsearch/autofill.py`) never submits a form, never fills passwords / SSN / birth
   dates / bank details, and leaves agreement and consent boxes for her. Phone, email, street and ZIP are
   never sent to the AI. All Playwright calls run on its one worker thread.
+- Tailor resume (`jobsearch/tailor.py`) never edits `profile/Resume.docx`; it writes a copy. Only the summary,
+  bullets (within one job) and skills-line order may change, and `check_changes` enforces that and flags
+  anything not in her resume. Keep those limits.
 - UI text is plain language for Jen (not developer terms).
 - Commit and push only when Eric asks. Let changes pile up until then.

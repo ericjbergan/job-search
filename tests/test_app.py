@@ -1849,3 +1849,152 @@ class AutofillTests(FreshDbTest):
         self.assertEqual(again, first)
         self.assertEqual(fake.call_count, 2)  # only a changed resume is read again
         self.assertNotIn("jane@example.com", fake.call_args_list[0].args[1])
+
+
+def make_docx(paragraphs):
+    """A minimal .docx: paragraphs as (style, [(text, bold), ...]); style "bullet" = a numbered list item."""
+    body = []
+    for style, runs in paragraphs:
+        ppr = ('<w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>'
+               if style == "bullet" else f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else "")
+        rs = "".join(f'<w:r>{"<w:rPr><w:b/></w:rPr>" if bold else ""}<w:t xml:space="preserve">{text}</w:t></w:r>'
+                     for text, bold in runs)
+        body.append(f"<w:p>{ppr}{rs}</w:p>")
+    xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document '
+           'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+           + "".join(body) + "</w:body></w:document>")
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("word/document.xml", xml)
+    return out.getvalue()
+
+
+TEST_RESUME = [
+    ("Title", [("Jane Doe", False)]),
+    ("", [("Newark, OH | jane@example.com", False)]),
+    ("Heading1", [("PROFESSIONAL SUMMARY", False)]),
+    ("", [("Business analyst with 10 years of experience gathering requirements and leading UAT for retail systems.", False)]),
+    ("Heading1", [("SKILLS", False)]),
+    ("", [("Key Skills: ", True), ("SQL • Jira • Visio", False)]),
+    ("Heading1", [("EXPERIENCE", False)]),
+    ("Heading3", [("ACME CORP, Columbus, Ohio    2019 to 2026", False)]),
+    ("bullet", [("Gathered requirements in working sessions with business users.", False)]),
+    ("bullet", [("Led UAT for the order system.", False)]),
+    ("bullet", [("Wrote SQL queries to check data.", False)]),
+    ("Heading3", [("BETA INC, Dublin, Ohio    2012 to 2019", False)]),
+    ("bullet", [("Managed the backlog in Jira.", False)]),
+    ("bullet", [("Drew process maps in Visio.", False)]),
+]
+
+
+class TailorTests(FreshDbTest):
+    """Tailor resume: what may change, the checks on the AI's changes, and the saved Word copy."""
+
+    def setUp(self):
+        super().setUp()
+        self.profile_dir = tempfile.mkdtemp()
+        self.out_dir = tempfile.mkdtemp()
+        with open(os.path.join(self.profile_dir, "Resume.docx"), "wb") as f:
+            f.write(make_docx(TEST_RESUME))
+        env = mock.patch.dict(os.environ, {"JOBSEARCH_PROFILE_DIR": self.profile_dir, "TAILORED_DIR": self.out_dir,
+                                           "ANTHROPIC_API_KEY": "test"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(shutil.rmtree, self.profile_dir, True)
+        self.addCleanup(shutil.rmtree, self.out_dir, True)
+
+    def paras(self):
+        from jobsearch import tailor
+        return tailor.read_paragraphs(make_docx(TEST_RESUME))
+
+    def add_job(self):
+        job = board_job(1, "Business Analyst", "Columbus, OH")
+        job["job_description"] = "We need a business analyst for requirements, UAT and SQL. Tableau a plus. " * 5
+        db.save_results([job])
+        return db.list_jobs()[0]["id"]
+
+    def test_what_may_change(self):
+        kinds = {p["i"]: (p["kind"], p["job"]) for p in self.paras()}
+        self.assertEqual(kinds[0][0], None)                    # her name
+        self.assertEqual(kinds[1][0], None)                    # contact line
+        self.assertEqual(kinds[3][0], "summary")
+        self.assertEqual(kinds[5][0], "list")
+        self.assertEqual(kinds[7][0], None)                    # employer and dates
+        self.assertEqual(kinds[8], ("bullet", "ACME CORP"))
+        self.assertEqual(kinds[12], ("bullet", "BETA INC"))
+
+    def test_checks_on_the_ai_changes(self):
+        from jobsearch import tailor
+        paras = self.paras()
+        text = "\n".join(p["text"] for p in paras)
+        raw = [
+            {"type": "rewrite", "para": 3, "text": "Business analyst with 10 years leading UAT and requirements.", "why": "lead"},
+            {"type": "rewrite", "para": 9, "text": "Led UAT with Tableau dashboards for 40 users.", "why": "x"},
+            {"type": "rewrite", "para": 7, "text": "ACME CORP, Remote", "why": "fixed line"},
+            {"type": "rewrite", "para": 5, "text": "Key Skills: SQL • Tableau • Jira", "why": "new item"},
+            {"type": "rewrite", "para": 5, "text": "Key Skills: Jira • SQL • Visio", "why": "order"},
+            {"type": "reorder", "paras": [8, 9, 10], "order": [10, 8, 9], "why": "SQL first"},
+            {"type": "reorder", "paras": [10, 11, 12], "order": [12, 10, 11], "why": "across jobs"},
+            {"type": "reorder", "paras": [8, 10], "order": [10, 8], "why": "not next to each other"},
+        ]
+        kept = tailor.check_changes(raw, paras, text)
+        self.assertEqual([(c["type"], c.get("para"), c.get("paras")) for c in kept],
+                         [("rewrite", 3, None), ("rewrite", 9, None), ("rewrite", 5, None), ("reorder", None, [8, 9, 10])])
+        self.assertEqual(kept[0]["unsupported"], [])
+        self.assertEqual(kept[1]["unsupported"], ["Tableau", "40"])   # not on her resume: flagged
+        self.assertEqual(kept[3]["after"][0], "Wrote SQL queries to check data.")
+
+    def test_writes_a_copy_with_formatting_kept(self):
+        from jobsearch import tailor
+        data = make_docx(TEST_RESUME)
+        out = tailor.write_resume(data, [
+            {"type": "rewrite", "para": 3, "text": "Requirements & UAT lead <for> retail."},
+            {"type": "rewrite", "para": 5, "text": "Key Skills: Jira • SQL • Visio"},
+            {"type": "reorder", "paras": [8, 9, 10], "order": [10, 8, 9]}])
+        back = {p["i"]: p["text"] for p in tailor.read_paragraphs(out)}
+        self.assertEqual(back[3], "Requirements & UAT lead <for> retail.")
+        self.assertEqual([back[8], back[9], back[10]], ["Wrote SQL queries to check data.",
+                         "Gathered requirements in working sessions with business users.", "Led UAT for the order system."])
+        xml = zipfile.ZipFile(io.BytesIO(out)).read("word/document.xml").decode()
+        self.assertIn('<w:b/></w:rPr><w:t xml:space="preserve">Key Skills: </w:t>', xml)  # bold label kept
+        self.assertIn("<w:numPr>", xml)
+        import xml.etree.ElementTree as ET
+        ET.fromstring(xml)  # still valid XML
+
+    def test_suggest_save_and_fill_application_uses_it(self):
+        from jobsearch import autofill, tailor
+        jid = self.add_job()
+        reply = json.dumps({"changes": [
+            {"type": "rewrite", "para": 3, "text": "Business analyst with 10 years leading UAT and requirements.", "why": "lead"},
+            {"type": "reorder", "paras": [8, 9, 10], "order": [10, 8, 9], "why": "SQL first"}],
+            "gaps": ["Tableau"]})
+        sent = []
+        with mock.patch.object(tailor.ai, "json_answer", side_effect=lambda i, t, task: sent.append(t) or reply):
+            r = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
+            again = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
+        self.assertEqual(len(sent), 1)                       # saved: opening it again costs nothing
+        self.assertNotIn("jane@example.com", sent[0])        # contact details aren't sent
+        self.assertEqual((len(r["changes"]), r["gaps"], again["changes"]), (2, ["Tableau"], r["changes"]))
+
+        self.assertEqual(self.client.post(f"/api/jobs/{jid}/tailor/save", json={"picked": []}).status_code, 400)
+        saved = self.client.post(f"/api/jobs/{jid}/tailor/save", json={"picked": [1]}).get_json()
+        self.assertEqual(saved["name"], "Resume - Acme - Business Analyst.docx")
+        self.assertTrue(os.path.exists(saved["path"]))
+        with open(saved["path"], "rb") as f:
+            back = {p["i"]: p["text"] for p in tailor.read_paragraphs(f.read())}
+        self.assertEqual(back[8], "Wrote SQL queries to check data.")
+        self.assertTrue(back[3].startswith("Business analyst with 10 years of experience"))  # unpicked: unchanged
+        self.assertEqual(self.client.get(f"/api/jobs/{jid}/tailor").get_json()["path"], saved["path"])
+        self.assertEqual(autofill.resume_for(db.get_job(jid)), saved["path"])
+        with open(os.path.join(self.profile_dir, "Resume.docx"), "rb") as f:
+            self.assertEqual(f.read(), make_docx(TEST_RESUME))  # her own resume untouched
+
+    def test_needs_a_description(self):
+        job = board_job(2, "BA")
+        job["job_description"] = "short"
+        db.save_results([job])
+        jid = db.list_jobs()[0]["id"]
+        r = self.client.post(f"/api/jobs/{jid}/tailor")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("no description", r.get_json()["error"])

@@ -21,7 +21,7 @@ import queue
 import re
 import threading
 
-from . import ai, db, profile_files, ranking
+from . import ai, db, profile_files, ranking, tailor
 
 
 class FillError(Exception):
@@ -922,14 +922,21 @@ def fill_page(job, info, profile):
         return {"filled": [], "drafted": [], "needs_you": [], "failed": [], "note": note,
                 "empty": True, "found": 0, "added": added}
     steps, needs_you, ai_note = build_plan(fields, info, ask_ai=ask_ai_for(info, profile, job, history),
-                                           resume_file=profile_files.resume_path())
+                                           resume_file=resume_for(job))
     filled, failed = _worker.run(lambda: apply_plan(_current_page(), steps), timeout=600)  # long Workday pages
-    return {"filled": [s["label"] for s in filled if s["source"] == "info"],
+    uploaded = next((os.path.basename(s["value"]) for s in filled if s["kind"] == "file"), None)
+    return {"uploaded": uploaded,
+            "filled": [s["label"] for s in filled if s["source"] == "info"],
             "drafted": [_where(s) for s in filled if s["source"] == "ai"],
             "needs_you": needs_you, "failed": failed, "note": " ".join(x for x in (note, ai_note) if x),
             "found": len(fields), "already": sum(1 for f in fields if f.get("filled")), "added": added,
             "seen": [{"label": f.get("label"), "kind": f["kind"], "section": f.get("section"),
                       "filled": bool(f.get("filled"))} for f in fields]}
+
+
+def resume_for(job):
+    """The resume to upload for this job: its tailored copy if one was saved, else her resume."""
+    return tailor.tailored_path(job["id"]) or profile_files.resume_path()
 
 
 def _where(step):

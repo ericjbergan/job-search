@@ -11,7 +11,7 @@ from flask import Flask, jsonify, render_template, request
 load_dotenv()
 
 from jobsearch import (ai, autofill, benefits, boards, db, geo, importer, jobhunt, jsearch, profile_files, ranking,
-                       ranking_files, skills)
+                       ranking_files, skills, tailor)
 from jobsearch.pay import format_pay
 
 app = Flask(__name__)
@@ -706,6 +706,54 @@ def api_apply_fill(job_id):
     except Exception as e:  # a browser problem: show it rather than a blank 500
         return _error(f"Fill application hit a problem: {str(e).splitlines()[0] if str(e) else type(e).__name__}", 500)
     return jsonify(result)
+
+
+@app.route("/api/jobs/<int:job_id>/tailor", methods=["GET", "POST"])
+def api_tailor(job_id):
+    """GET: the tailored resume saved for this job (if any). POST: suggested resume changes for this job
+    (asks the AI once; saved until her resume or the listing changes)."""
+    job = db.get_job(job_id)
+    if not job:
+        return _error("Job not found", 404)
+    if request.method == "GET":
+        path = tailor.tailored_path(job_id)
+        return jsonify({"path": path, "name": os.path.basename(path) if path else None})
+    match = (db.get_matches([job_id]).get(job_id) or {}).get("details") or {}
+    try:
+        result = tailor.suggest(job, db.get_profile(), match)
+    except tailor.TailorError as e:
+        return _error(str(e))
+    except ai.AIError as e:
+        return _error(f"Tailor resume couldn't get suggestions: {e}")
+    return jsonify(result)
+
+
+@app.route("/api/jobs/<int:job_id>/tailor/save", methods=["POST"])
+def api_tailor_save(job_id):
+    """Save a Word copy of her resume with the changes she picked (her original isn't changed)."""
+    job = db.get_job(job_id)
+    if not job:
+        return _error("Job not found", 404)
+    picked = (request.get_json() or {}).get("picked") or []
+    try:
+        path = tailor.save(job, picked)
+    except tailor.TailorError as e:
+        return _error(str(e))
+    except OSError as e:
+        return _error(f"Couldn't save the tailored resume: {e}", 500)
+    return jsonify({"path": path, "name": os.path.basename(path), "folder": os.path.dirname(path)})
+
+
+@app.route("/api/jobs/<int:job_id>/tailor/open", methods=["POST"])
+def api_tailor_open(job_id):
+    """Open the saved tailored resume in Word (this computer only)."""
+    path = tailor.tailored_path(job_id)
+    if not path:
+        return _error("No tailored resume saved for this job yet")
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        return _error("Open it on the computer running the app", 403)
+    os.startfile(path)  # Windows: opens with Word
+    return jsonify({"ok": True})
 
 
 @app.route("/api/apply/snapshot", methods=["POST"])

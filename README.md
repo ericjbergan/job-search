@@ -53,6 +53,20 @@ bottom right of the app:
 Phone, email, street and ZIP are typed in directly and never sent to the AI. Sites differ a lot, so some
 fields (especially Workday's) may be missed; the panel lists what still needs her.
 
+## Tailoring her resume to a job
+
+Open a job and click **Tailor resume**. Claude Sonnet suggests changes to `profile/Resume.docx` for that
+listing: a summary that leads with what the job cares about, bullets reworded and reordered within each job,
+and skills lines reordered. Each change shows before (gray) and after (green); she ticks the ones she wants
+and clicks **Save tailored resume**. That saves a Word copy, same layout, in OneDrive's
+`Job Search tailored resumes` folder (or `TAILORED_DIR`), named `Resume - Company - Title.docx`, and
+**Fill application** uploads that copy for that job. Her own resume file is never changed.
+
+It stays within her real experience: names, contact details, employers, titles and dates are never
+changed, a skills line keeps exactly the same items, and any tool, name or number in a suggestion that isn't
+in her resume is flagged in red and starts unticked. What the listing asks for that her resume doesn't show
+is listed as gaps. Suggestions are saved per job, so reopening costs nothing until the resume or listing changes.
+
 ## ChatGPT or Claude
 
 Each AI step uses the service that did it best in a side-by-side test:
@@ -60,7 +74,7 @@ Each AI step uses the service that did it best in a side-by-side test:
 - **Reading listings** (pasted text, filling in missing details): ChatGPT (`OPENAI_API_KEY`). The two were about even.
 - **Benefits lookups** (benefits pages and web search): Claude (`ANTHROPIC_API_KEY`). It found real figures with quotes.
 - **Scoring Interested jobs** (resume and interests vs the listing): Claude Sonnet. It read her resume accurately and judged each job's mix of work; ChatGPT missed tools on her resume.
-- **Application questions** (Fill application): Claude Sonnet, writing from her resume.
+- **Application questions and Tailor resume**: Claude Sonnet, writing from her resume.
 
 Change any of them in `.env` with `AI_LISTINGS`, `AI_BENEFITS`, `AI_MATCHING` or `AI_APPLICATIONS` (`openai` or `claude`). If the chosen
 service's key isn't in `.env`, the other one is used, so a laptop with only an OpenAI key still works.
