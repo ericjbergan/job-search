@@ -307,7 +307,7 @@ def api_list_jobs():
     saved = {benefits.company_key(c["name"]): c["id"] for c in db.list_companies()}
     for j in jobs:
         j["saved_company_id"] = j.get("company_id") or saved.get(benefits.company_key(j.get("company") or ""))
-    # Rank numbers (every job except Rejected / Not a fit). Calculated from saved scores only:
+    # Rank numbers (every job except Applied / Rejected / Not a fit). Calculated from saved scores only:
     # the AI never runs here, only when she clicks Rank Jobs.
     if any(j["status"] not in ranking.SKIP_STATUSES for j in jobs):
         ranked = ranking.rank()["jobs"]
@@ -360,7 +360,7 @@ def api_profile_resume_file():
 
 @app.route("/api/ranking")
 def api_ranking():
-    """Rank numbers and ratings for every job except Rejected / Not a fit (no AI calls)."""
+    """Rank numbers and ratings for every job except Applied / Rejected / Not a fit (no AI calls)."""
     r = ranking.rank()
     return jsonify({k: r[k] for k in ("count", "profile_ready", "needs_ai", "weights")})
 

@@ -1303,13 +1303,14 @@ class SkillsTests(FreshDbTest):
 
 
 class RankingTests(FreshDbTest):
-    """Rank Jobs: every job except Rejected / Not a fit (the AI is faked)."""
+    """Rank Jobs: every job except Applied / Rejected / Not a fit (the AI is faked)."""
 
     def add_jobs(self):
         long = " Requirements: SQL, Jira, stakeholder interviews." * 10
         jobs = [board_job(1, "BA remote", "Columbus, OH"), board_job(2, "BA hybrid", "Dublin, OH"),
                 board_job(3, "BA no pay", "Westerville, OH"), board_job(4, "BA rejected", "Columbus, OH"),
-                board_job(5, "BA not a fit", "Columbus, OH")]
+                board_job(5, "BA not a fit", "Columbus, OH"),
+                board_job(6, "BA applied", "Columbus, OH")]
         for j in jobs:
             j["job_description"] = j["job_title"] + long
         db.save_results(jobs)
@@ -1317,10 +1318,11 @@ class RankingTests(FreshDbTest):
         with db.connect() as conn:
             conn.execute("UPDATE jobs SET status='interested', salary_min=110000, salary_max=140000, salary_period='YEAR', "
                          "work_mode='remote' WHERE id=?", (ids["BA remote"],))
-            conn.execute("UPDATE jobs SET status='applied', salary_min=55, salary_max=60, salary_period='HOUR', "
+            conn.execute("UPDATE jobs SET status='interviewing', salary_min=55, salary_max=60, salary_period='HOUR', "
                          "work_mode='hybrid' WHERE id=?", (ids["BA hybrid"],))
             conn.execute("UPDATE jobs SET status='rejected' WHERE id=?", (ids["BA rejected"],))
             conn.execute("UPDATE jobs SET status='not_a_fit' WHERE id=?", (ids["BA not a fit"],))
+            conn.execute("UPDATE jobs SET status='applied' WHERE id=?", (ids["BA applied"],))
         return ids
 
     def fake_ai(self, instructions, text, task="listings"):
@@ -1378,13 +1380,14 @@ class RankingTests(FreshDbTest):
         ids = self.add_jobs()
         self.client.post("/api/profile", json={"resume": "Business analyst, 8 years, SQL", "likes": "Requirements gathering"})
         info = self.client.get("/api/ranking").get_json()
-        self.assertEqual((info["count"], info["needs_ai"]), (3, 3))            # Rejected / Not a fit left out
+        self.assertEqual((info["count"], info["needs_ai"]), (3, 3))            # Applied / Rejected / Not a fit left out
         r, calls = self.rank_jobs()
         self.assertEqual((r.status_code, r.get_json()["read"], calls), (200, 3, 3))
 
         jobs = {j["title"]: j for j in self.client.get("/api/jobs?sort=rank").get_json()}
         self.assertNotIn("rank", jobs["BA rejected"])
         self.assertNotIn("rank", jobs["BA not a fit"])
+        self.assertNotIn("rank", jobs["BA applied"])
         remote, hybrid, no_pay = jobs["BA remote"]["rank"], jobs["BA hybrid"]["rank"], jobs["BA no pay"]["rank"]
         self.assertEqual((remote["qualify"], hybrid["qualify"], no_pay["qualify"]), (1, 2, 3))
         self.assertEqual((remote["interest"], hybrid["interest"]), (1, 1))     # same interest score: tied
@@ -1394,7 +1397,7 @@ class RankingTests(FreshDbTest):
         self.assertEqual(ordered[0]["title"], "BA remote")
         # "Hide not a fit & rejected" leaves both out; their own tabs still show them.
         shown = {j["title"] for j in self.client.get("/api/jobs?sort=rank&hide_not_fit=1").get_json()}
-        self.assertEqual(shown, {"BA remote", "BA hybrid", "BA no pay"})
+        self.assertEqual(shown, {"BA remote", "BA hybrid", "BA no pay", "BA applied"})
         tab = self.client.get("/api/jobs?status=rejected&hide_not_fit=1").get_json()
         self.assertEqual([j["title"] for j in tab], ["BA rejected"])
         self.assertIn("BA rejected", {j["title"] for j in self.client.get("/api/jobs").get_json()})

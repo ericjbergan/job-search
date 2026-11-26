@@ -1,4 +1,4 @@
-"""Rank her jobs (every job except Rejected and Not a fit) by how much they matter to her.
+"""Rank her jobs (every job except Applied, Rejected and Not a fit) by how much they matter to her.
 
 Seven parts, weighted (Jen's "Rank my jobs based on criteria"):
   Qualify (3)    - AI compares the listing with her resume (0-100), ranked against the other jobs
@@ -34,7 +34,7 @@ SCALES = {"qualify": (0, 100), "interest": (0, 100), "salary": (1, 5), "retireme
           "pto": (1, 4), "commute": (0, 4), "bonus": (1, 4)}
 NO_INFO = {"retirement_score": 2, "pto_score": 2, "bonus_score": 2}  # the spreadsheet's "no info" values
 NEAR_MILES = 25          # about a 30-minute drive
-SKIP_STATUSES = ("rejected", "not_a_fit")
+SKIP_STATUSES = ("applied", "rejected", "not_a_fit")
 MAX_TEXT = 15000
 PROMPT_VERSION = "2"
 _YEARLY = {"YEAR": 1, "MONTH": 12, "WEEK": 52, "DAY": 260, "HOUR": 2080}
@@ -218,7 +218,7 @@ def score_pending(limit=6, workers=3):
 
 
 def rankable_jobs():
-    """Every saved job except Rejected and Not a fit, with descriptions."""
+    """Every saved job except Applied, Rejected and Not a fit, with descriptions."""
     return [db.get_job(j["id"]) for j in db.list_jobs() if j["status"] not in SKIP_STATUSES]
 
 
@@ -283,7 +283,7 @@ def _competition_rank(values):
 # --- putting it together ------------------------------------------------------------------
 
 def rank():
-    """Rank every job except Rejected / Not a fit.
+    """Rank every job except Applied / Rejected / Not a fit.
 
     Returns {"jobs": {job id: breakdown}, "count", "profile_ready", "needs_ai", "weights"}. Each
     breakdown has overall_rank / overall (0-100), qualify and interest (score, rank, summary) and

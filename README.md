@@ -22,7 +22,7 @@ The database (`jobs.db`) is created on first run and loaded with the starter com
 
 Paste her resume (or load a .docx/.txt) and her interests (three lists: work she likes, fine in small doses,
 keep to a minimum) in the **Resume & interests** card, then click **Rank Jobs** above the job list. Every
-job except Rejected and Not a fit gets rank numbers, shown in the middle of each job card:
+job except Applied, Rejected and Not a fit gets rank numbers, shown in the middle of each job card:
 
 - **Qualify** and **Interest**: Claude Sonnet compares each listing with her resume and interest lists
   (only when she clicks Rank Jobs, never on its own), and the jobs are ranked 1 = best. Click the label

@@ -1020,11 +1020,11 @@ async function refreshAll() {
 }
 
 // --- ranking jobs -----------------------------------------------------------------------------------
-// Rank Jobs ranks every job except Rejected / Not a fit. Qualify and Interest are read by the AI only
+// Rank Jobs ranks every job except Applied / Rejected / Not a fit. Qualify and Interest are read by the AI only
 // when she clicks the button; everything else (salary, benefits, commute, rank numbers) is worked out
 // from what's saved, so the numbers on the cards are always there.
 
-const UNRANKED = ['rejected', 'not_a_fit'];
+const UNRANKED = ['applied', 'rejected', 'not_a_fit'];
 
 function isRanked(job) {
     return !UNRANKED.includes(job.status);
