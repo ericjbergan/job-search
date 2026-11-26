@@ -53,6 +53,7 @@ def api_meta():
         "has_benefits_ai": ai.has_key("benefits"),
         "benefits_ai_name": ai.name("benefits"),
         "benefits_ai_key": ai.key_name("benefits"),
+        "matching_ai_name": ai.name("matching"),
         "benefit_scales": benefits.SCALES,
         "benefit_topics": list(benefits.TOPICS.items()),  # a list keeps the display order
         "ai_lookups_this_month": db.ai_calls_this_month(),
@@ -288,25 +289,28 @@ def api_list_jobs():
     saved = {benefits.company_key(c["name"]): c["id"] for c in db.list_companies()}
     for j in jobs:
         j["saved_company_id"] = j.get("company_id") or saved.get(benefits.company_key(j.get("company") or ""))
-    # Match scores for Interested jobs (what the ranking compares), and the "Best match" sort.
-    if any(j["status"] == "interested" for j in jobs):
-        scored = ranking.rank("interested")["jobs"]
+    # Rank numbers (every job except Rejected / Not a fit). Calculated from saved scores only:
+    # the AI never runs here, only when she clicks Rank Jobs.
+    if any(j["status"] not in ranking.SKIP_STATUSES for j in jobs):
+        ranked = ranking.rank()["jobs"]
         for j in jobs:
-            r = scored.get(j["id"])
-            j["match_score"] = r["score"] if r else None
-    if request.args.get("sort") == "match":
-        jobs.sort(key=lambda j: (j.get("match_score") is None, -(j.get("match_score") or 0)))
+            r = ranked.get(j["id"])
+            if r:
+                j["rank"] = {"overall": r["overall_rank"], "qualify": r["parts"]["qualify"]["rank"],
+                             "interest": r["parts"]["interest"]["rank"], "salary": r["parts"]["salary"]["score"]}
+    if request.args.get("sort") == "rank":
+        jobs.sort(key=lambda j: (j.get("rank") is None, (j.get("rank") or {}).get("overall") or 0))
     return jsonify(jobs)
 
 
-# --- ranking her Interested jobs ------------------------------------------------------------
+# --- ranking her jobs -----------------------------------------------------------------------
 
 @app.route("/api/profile", methods=["GET", "POST"])
 def api_profile():
     """Her resume and interests (kept in her own database, used for match scores)."""
     if request.method == "POST":
         data = request.get_json() or {}
-        db.set_profile(resume=data.get("resume"), interests=data.get("interests"))
+        db.set_profile(**{k: data.get(k) for k in db.PROFILE_FIELDS})
     return jsonify(db.get_profile())
 
 
@@ -325,30 +329,39 @@ def api_profile_resume_file():
 
 @app.route("/api/ranking")
 def api_ranking():
-    return jsonify(ranking.rank("interested"))
+    """Rank numbers and ratings for every job except Rejected / Not a fit (no AI calls)."""
+    r = ranking.rank()
+    return jsonify({k: r[k] for k in ("count", "profile_ready", "needs_ai", "weights")})
 
 
 @app.route("/api/ranking/score", methods=["POST"])
 def api_ranking_score():
-    """Have the AI score a batch of Interested jobs (the page repeats this until none are left)."""
+    """The Rank Jobs button: have the AI read a batch of jobs that need it (the page repeats this
+    until none are left). Only runs when she clicks; nothing scores automatically."""
     try:
-        result = ranking.score_pending("interested")
+        result = ranking.score_pending()
     except ai.AIError as e:
         return _error(str(e))
-    return jsonify({**result, "ranking": ranking.rank("interested")})
+    return jsonify(result)
 
 
 @app.route("/api/jobs/<int:job_id>/match", methods=["GET", "PATCH"])
 def api_job_match(job_id):
-    """One job's match breakdown; PATCH sets her own scores ({"skills": 80, "commute": ""} ...)."""
+    """One job's ranking breakdown; PATCH sets her own Qualify / Interest scores
+    ({"qualify": 80, "interest": ""}; blank goes back to the AI's score)."""
     if not db.get_job(job_id):
         return _error("Job not found", 404)
     if request.method == "PATCH":
+        data = request.get_json() or {}
+        names = {"qualify": "skills", "interest": "interests"}
         try:
-            db.set_match_overrides(job_id, request.get_json() or {})
+            db.set_match_overrides(job_id, {names[k]: v for k, v in data.items() if k in names})
         except ValueError as e:
             return _error(str(e))
-    return jsonify(ranking.rank("interested")["jobs"].get(job_id))
+    r = ranking.rank()
+    job = r["jobs"].get(job_id)
+    order = [name for name, _, _ in ranking.CRITERIA]
+    return jsonify({**job, "count": r["count"], "weights_order": order} if job else None)
 
 
 @app.route("/api/jobs/<int:job_id>/reload", methods=["POST"])

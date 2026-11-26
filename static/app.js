@@ -172,6 +172,9 @@ async function loadMeta() {
     state.hasBenefitsAI = meta.has_benefits_ai;
     state.benefitsAI = meta.benefits_ai_name || 'ChatGPT';
     state.benefitsAIKey = meta.benefits_ai_key || 'OPENAI_API_KEY';
+    state.matchingAI = meta.matching_ai_name || 'ChatGPT';
+    const privacy = document.getElementById('pPrivacyHint');
+    if (privacy) privacy.textContent = `Kept only on this computer. The resume, interests and each listing are sent to ${state.matchingAI} when scoring.`;
     state.aiLookups = meta.ai_lookups_this_month;
     renderStatusTabs(meta.status_counts);
     renderUsage(meta.pages_used_this_month);
@@ -773,7 +776,7 @@ async function loadJobs() {
     fillBtn.classList.toggle('hidden', !noDesc || !reloadable || !!fillBtn.dataset.busy);
     if (!fillBtn.dataset.busy) fillBtn.textContent = `Reload these ${reloadable} from their listings`;
     // The ranking button shows on the Interested tab; its counts change as jobs are marked Interested.
-    if (state.status === 'interested') loadRankStatus().catch(() => {}); else updateRankButton();
+    loadRankStatus().catch(() => {});
     if (jobs.length === 0) {
         list.innerHTML = '<div class="panel empty">No jobs match. Run a search to add some.</div>';
         return;
@@ -806,9 +809,8 @@ function renderJobSummary(job) {
                 </div>
                 ${interested || applied ? interestChooser(job) : ''}
             </div>
+            ${rankColumn(job)}
             <div class="job-side">
-                ${job.match_score !== null && job.match_score !== undefined
-                    ? `<div class="match-badge ${matchClass(job.match_score)}" title="Match score (open the job for the breakdown)">${job.match_score} match</div>` : ''}
                 ${salary ? `<div class="salary" title="${esc(job.salary_text || '')}">${esc(salary)}</div>` : '<div class="no-pay">pay not listed</div>'}
                 <div>${job.posted_at ? 'posted ' + esc(shortDate(job.posted_at)) : ''}</div>
                 ${closes ? `<div class="${closes.startsWith('closed') ? 'closed' : 'closes'}">${esc(closes)}</div>` : ''}
@@ -847,7 +849,7 @@ async function openJob(jobId, closeOthers) {
             ${apply ? `<a class="apply" href="${apply}" target="_blank" rel="noopener noreferrer">Go to listing ↗</a>` : ''}
             ${apply ? `<button class="small secondary" onclick="reloadJob(${job.id}, this)" title="Read the listing page again to fill in the description and details">Reload from listing</button>` : ''}
         </div>
-        ${job.status === 'interested' ? `<div class="match-box" id="match-${job.id}"><div class="hint">Loading match score…</div></div>` : ''}
+        ${isRanked(job) ? `<div class="match-box" id="match-${job.id}"><div class="hint">Loading ranking…</div></div>` : ''}
         ${jobEditHtml(job)}
         ${jobBenefitsHtml(job)}
         ${descriptionHtml(job)}
@@ -862,7 +864,7 @@ async function openJob(jobId, closeOthers) {
             First saved ${esc(relativeDate(job.first_seen_at))} · last seen in results ${esc(relativeDate(job.last_seen_at))}
         </div>
     `;
-    if (job.status === 'interested') loadMatch(job.id).catch(e => showMessage(e.message, true));
+    if (isRanked(job)) loadMatch(job.id).catch(e => showMessage(e.message, true));
     // No description yet: try the listing once on its own; if that fails she can paste it.
     if (!hasDescription(job) && apply && !state.autoReloaded.has(job.id)) {
         state.autoReloaded.add(job.id);
@@ -1012,51 +1014,61 @@ async function refreshAll() {
     await loadProfile();
 }
 
-// --- ranking Interested jobs ------------------------------------------------------------------
+// --- ranking jobs -----------------------------------------------------------------------------------
+// Rank Jobs ranks every job except Rejected / Not a fit. Qualify and Interest are read by the AI only
+// when she clicks the button; everything else (salary, benefits, commute, rank numbers) is worked out
+// from what's saved, so the numbers on the cards are always there.
 
-function matchClass(score) {
-    return score >= 75 ? 'high' : score >= 55 ? 'mid' : 'low';
+const UNRANKED = ['rejected', 'not_a_fit'];
+
+function isRanked(job) {
+    return !UNRANKED.includes(job.status);
 }
+
+function rankColumn(job) {
+    const r = job.rank;
+    if (!r) return '<div class="job-ranks"></div>';
+    const num = n => (n === null || n === undefined) ? '–' : n;
+    const link = (kind, label, value) => value === null || value === undefined
+        ? `<span class="rank-label">${label}</span>: ${num(value)}`
+        : `<a class="rank-link" title="Why? (${label} Rank Summary)" onclick="showRankSummary(event, ${job.id}, '${kind}')">${label}</a>: ${value}`;
+    return `
+        <div class="job-ranks" title="Rank 1 = best fit">
+            <div>Overall: ${num(r.overall)}</div>
+            <div>${link('qualify', 'Qualify', r.qualify)}</div>
+            <div>${link('interest', 'Interest', r.interest)}</div>
+            <div>Salary Rating: ${num(r.salary)}</div>
+        </div>`;
+}
+
+// Profile boxes on the page -> the names the server stores them under.
+const PROFILE_BOXES = [['pResume', 'resume'], ['pLikes', 'likes'], ['pOk', 'ok'], ['pMinimal', 'minimal'],
+                       ['pInterests', 'interests']];
 
 async function loadProfile() {
     const p = await api('/api/profile');
-    document.getElementById('pResume').value = p.resume || '';
-    document.getElementById('pInterests').value = p.interests || '';
+    for (const [id, key] of PROFILE_BOXES) document.getElementById(id).value = p[key] || '';
     await loadRankStatus();
 }
 
 async function loadRankStatus() {
-    const r = await api('/api/ranking');
-    state.rankInfo = r;
-    const n = Object.keys(r.jobs).length;
-    const btn = document.getElementById('scoreJobsBtn');
-    if (!btn.dataset.busy) {
-        btn.disabled = !r.profile_ready || !r.needs_ai;
-        btn.textContent = !r.profile_ready ? 'Score Interested jobs' : r.needs_ai ? `Score ${r.needs_ai} job${r.needs_ai === 1 ? '' : 's'}` : 'All jobs scored';
-    }
+    state.rankInfo = await api('/api/ranking');
+    const r = state.rankInfo;
     document.getElementById('rankStatus').textContent = !r.profile_ready
-        ? 'Add her resume, then Save, to score skills and interests.'
-        : `${n} Interested job${n === 1 ? '' : 's'}${r.needs_ai ? `, ${r.needs_ai} to score` : ', all scored'}.`;
+        ? 'Add her resume, then Save. Then click Rank Jobs.'
+        : r.needs_ai ? `${r.needs_ai} job${r.needs_ai === 1 ? '' : 's'} not read yet for Qualify / Interest: click Rank Jobs.`
+                     : `All ${r.count} jobs ranked.`;
     updateRankButton();
 }
 
-// The ranking button on the Interested tab (next to the filters), so scoring is where the jobs are.
 function updateRankButton() {
     const btn = document.getElementById('rankBtn');
     const r = state.rankInfo;
-    const show = state.status === 'interested' && r && Object.keys(r.jobs).length > 0;
-    btn.classList.toggle('hidden', !show);
-    if (!show || btn.dataset.busy) return;
-    if (!r.profile_ready) {
-        btn.textContent = 'Score Interested jobs';
-        btn.title = 'Add her resume first (Ranking Interested jobs, in the sidebar)';
-    } else if (r.needs_ai) {
-        btn.textContent = `Score ${r.needs_ai} Interested job${r.needs_ai === 1 ? '' : 's'}`;
-        btn.title = 'Have ChatGPT compare these listings with her resume and interests';
-    } else {
-        btn.textContent = document.getElementById('sortJobs').value === 'match' ? 'Ranked by best match ✓' : 'Rank by best match';
-        btn.title = 'All Interested jobs are scored; sort them best match first';
-    }
+    if (!r || btn.dataset.busy) return;
+    btn.textContent = r.profile_ready && r.needs_ai ? `Rank Jobs (${r.needs_ai} to read)` : 'Rank Jobs';
+    btn.title = !r.profile_ready ? 'Add her resume first (Resume & interests, in the sidebar)'
+        : r.needs_ai ? `${state.matchingAI} reads the ${r.needs_ai} new or changed listing${r.needs_ai === 1 ? '' : 's'} against her resume and interests, then ranks every job`
+        : 'Sort every job by overall rank';
 }
 
 async function rankButtonClick(button) {
@@ -1065,30 +1077,21 @@ async function rankButtonClick(button) {
         togglePanel('profilePanel', true);
         document.getElementById('profilePanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
         document.getElementById('pResume').focus();
-        showMessage("Add her resume (and interests) in the Ranking card, click Save, then score.", true);
+        showMessage('Add her resume (and interests) in Resume & interests, click Save, then Rank Jobs.', true);
         return;
     }
-    if (r.needs_ai) {
-        button.dataset.busy = '1';
-        button.disabled = true;
-        try {
-            await scoreJobs(button);
-        } finally {
-            delete button.dataset.busy;
-            button.disabled = false;
-        }
-    }
-    document.getElementById('sortJobs').value = 'match';
+    if (r.needs_ai) await scoreJobs(button);
+    document.getElementById('sortJobs').value = 'rank';
     await loadJobs();
-    updateRankButton();
 }
 
 async function saveProfile(button) {
     button.disabled = true;
     try {
-        await api('/api/profile', { method: 'POST', body: {
-            resume: document.getElementById('pResume').value, interests: document.getElementById('pInterests').value } });
-        showMessage('Saved. Click Score to score jobs with the new resume or interests.');
+        const body = {};
+        for (const [id, key] of PROFILE_BOXES) body[key] = document.getElementById(id).value;
+        await api('/api/profile', { method: 'POST', body });
+        showMessage('Saved. Click Rank Jobs to rank with the new resume or interests.');
         await loadRankStatus();
     } catch (e) {
         showMessage(e.message, true);
@@ -1114,64 +1117,118 @@ async function loadResumeFile(input) {
     }
 }
 
-// Scores in small batches so the button can show progress.
+// Has the AI read the listings that need it, in small batches so the button can show progress.
 async function scoreJobs(button) {
     button.dataset.busy = '1';
     button.disabled = true;
-    let done = 0;
+    let done = 0, retried = false, left = 0, lastError = '';
     try {
         while (true) {
-            button.textContent = `Scoring… ${done} done`;
+            button.textContent = `Reading listings… ${done} done`;
             const r = await api('/api/ranking/score', { method: 'POST' });
             done += r.read;
-            if (r.errors.length) showMessage(`Some jobs couldn't be scored (they'll be tried again): ${r.errors[0]}`, true);
-            if (!r.remaining || !r.read) break;
+            left = r.remaining;
+            if (r.errors.length) lastError = r.errors[0];
+            if (!left) break;
+            if (!r.read) {
+                // Nothing went through this round (usually a dropped connection): try once more.
+                if (retried) break;
+                retried = true;
+            }
         }
-        showMessage(`Scored ${done} job${done === 1 ? '' : 's'}. Sort by Best match to rank them.`);
+        const msg = `Read ${done} listing${done === 1 ? '' : 's'} and ranked every job.`;
+        if (left) {
+            showMessage(`${msg} ${left} couldn't be read this time; click Rank Jobs again to retry.`
+                + (lastError ? ` (${lastError})` : ''), true);
+        } else {
+            showMessage(msg);
+        }
     } catch (e) {
         showMessage(e.message, true);
     } finally {
         delete button.dataset.busy;
+        button.disabled = false;
         await loadRankStatus();
-        await loadJobs();
     }
 }
 
+// The Qualify / Interest Rank Summary (clicking the label on a job card).
+async function showRankSummary(event, jobId, kind) {
+    event.stopPropagation();
+    const m = await api(`/api/jobs/${jobId}/match`);
+    if (!m) return;
+    const job = (state.listedJobs || []).find(j => j.id === jobId) || {};
+    const part = m.parts[kind];
+    const list = (title, items, cls) => items && items.length
+        ? `<h4>${title}</h4><div>${items.map(i => `<span class="chip-s ${cls}">${esc(i)}</span>`).join('')}</div>` : '';
+    let body = `<p class="rank-line"><b>${part.rank ? `Rank ${part.rank} of ${part.of}` : 'Not ranked yet'}</b>`
+        + (part.score !== null ? ` · score ${Math.round(part.score)}/100` : '') + (part.source === 'yours' ? ' (your score)' : '') + '</p>'
+        + `<p>${esc(part.reason || '')}</p>`;
+    if (kind === 'qualify') {
+        body += list('Meets', m.matched, 'ok') + list('Partly', m.partial, 'part') + list('Missing', m.missing, 'miss');
+    } else if (m.work_mix) {
+        const labels = { likes: 'Work she likes', ok: 'Fine in small doses', minimal: 'Keep to a minimum', other: 'Not on her lists' };
+        body += '<h4>Mix of work</h4>' + Object.entries(labels).filter(([k]) => m.work_mix[k])
+            .map(([k, l]) => `<div class="mix-row"><span>${l}</span><span class="mix-bar"><span class="mix-${k}" style="width:${m.work_mix[k]}%"></span></span><span>${m.work_mix[k]}%</span></div>`).join('');
+    }
+    const title = kind === 'qualify' ? 'Qualify Rank Summary' : 'Interest Rank Summary';
+    let modal = document.getElementById('rankModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'rankModal';
+        modal.className = 'rank-modal hidden';
+        modal.onclick = e => { if (e.target === modal) closeRankSummary(); };
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML = `<div class="rank-modal-box" role="dialog" aria-label="${title}">
+        <div class="rank-modal-head"><h3>${title}</h3><button class="small secondary" onclick="closeRankSummary()">Close</button></div>
+        <div class="rank-modal-job">${esc(job.title || '')}${job.company ? ' · ' + esc(job.company) : ''}</div>${body}</div>`;
+    modal.classList.remove('hidden');
+}
+
+function closeRankSummary() {
+    const modal = document.getElementById('rankModal');
+    if (modal) modal.classList.add('hidden');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRankSummary(); });
+
+// The breakdown inside an opened job.
 async function loadMatch(jobId) {
     const box = document.getElementById(`match-${jobId}`);
     if (!box) return;
     const m = await api(`/api/jobs/${jobId}/match`);
     if (!m) { box.innerHTML = ''; return; }
-    const rows = m.criteria.map(c => `
-        <tr class="${c.source}">
-            <th>${esc(c.label)} <span class="weight">×${c.weight}</span></th>
-            <td class="num"><input type="number" min="0" max="100" id="mo-${c.name}-${jobId}"
-                value="${c.source === 'yours' ? c.score : ''}" placeholder="${c.score === null ? '–' : c.score}"
-                title="Type your own score (0-100) to replace this one"></td>
-            <td class="why">${esc(c.reason || '')}${c.source === 'yours'
-                ? ` <a class="small-link" onclick="clearMatchScore(${jobId}, '${c.name}')">use calculated</a>` : ''}</td>
-        </tr>`).join('');
-    const chips = (title, items, cls) => items.length
-        ? `<div class="match-chips"><span class="chips-title">${title}</span>${items.map(i => `<span class="chip-s ${cls}">${esc(i)}</span>`).join('')}</div>` : '';
+    const shown = (name, p) => p.score === null ? '–'
+        : ['qualify', 'interest'].includes(name) ? `${Math.round(p.score)}/100${p.rank ? ` (rank ${p.rank} of ${p.of})` : ''}`
+        : name === 'salary' ? `${p.score} of 5` : name === 'commute' ? `${p.score} of 4` : `${p.score} of 4`;
+    const rows = m.weights_order.map(name => {
+        const p = m.parts[name];
+        const editable = ['qualify', 'interest'].includes(name);
+        return `<tr class="${p.source}">
+            <th>${esc(p.label)} <span class="weight">×${p.weight}</span></th>
+            <td class="num">${editable ? `<input type="number" min="0" max="100" id="mo-${name}-${jobId}"
+                value="${p.source === 'yours' ? Math.round(p.score) : ''}" placeholder="${p.score === null ? '–' : Math.round(p.score)}"
+                title="Type your own score (0-100) to replace this one">` : ''}</td>
+            <td class="val">${shown(name, p)}</td>
+            <td class="why">${esc(p.reason || '')}${p.source === 'yours'
+                ? ` <a class="small-link" onclick="clearMatchScore(${jobId}, '${name}')">use the AI's score</a>` : ''}</td>
+        </tr>`;
+    }).join('');
     box.innerHTML = `
         <div class="match-head">
-            <h4>Match score</h4>
-            ${m.score === null ? '<span class="hint">Not enough information yet</span>'
-                : `<span class="match-badge big ${matchClass(m.score)}">${m.score}</span>
-                   <span class="hint">based on ${m.based_on} of 5</span>`}
-            ${m.needs_ai ? '<span class="hint">· resume, interests or listing changed: click Score in the sidebar</span>' : ''}
+            <h4>Ranking</h4>
+            <span class="rank-overall">Overall rank ${m.overall_rank} of ${m.count}</span>
+            <span class="hint">overall score ${m.overall}/100</span>
+            ${m.needs_ai ? '<span class="hint">· resume, interests or listing changed: click Rank Jobs</span>' : ''}
         </div>
         <table class="match-table">${rows}</table>
-        ${chips('Meets', m.matched, 'ok')}${chips('Partly', m.partial, 'part')}${chips('Missing', m.missing, 'miss')}
-        <button class="small" onclick="saveMatchScores(${jobId})">Save my scores</button>
-        <span class="hint">Blank boxes use the calculated score shown in grey. Anything missing counts as 50.</span>`;
+        <button class="small" onclick="saveMatchScores(${jobId})">Save my Qualify / Interest scores</button>
+        <span class="hint">Blank boxes use the AI's score. Retirement, PTO, bonus and commute come from the Benefits panel.</span>`;
 }
 
 async function saveMatchScores(jobId) {
     const body = {};
-    for (const name of ['skills', 'interests', 'salary', 'benefits', 'commute']) {
-        body[name] = document.getElementById(`mo-${name}-${jobId}`).value;
-    }
+    for (const name of ['qualify', 'interest']) body[name] = document.getElementById(`mo-${name}-${jobId}`).value;
     try {
         await api(`/api/jobs/${jobId}/match`, { method: 'PATCH', body });
         await loadMatch(jobId);

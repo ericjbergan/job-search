@@ -13,6 +13,8 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+rem Remember what was installed, so the start shortcut only reinstalls after an update.
+copy /y requirements.txt .requirements-installed >nul
 
 if not exist .env (
     copy .env.example .env >nul

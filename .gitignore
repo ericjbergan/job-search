@@ -22,3 +22,6 @@ venv/
 
 # Side-by-side AI comparison report (holds her job data)
 ai-comparison.html
+
+# Marker: requirements already installed on this computer (see start-jobsearch.bat)
+.requirements-installed

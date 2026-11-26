@@ -398,3 +398,24 @@ aside { position: sticky; top: 0; max-height: 100vh; overflow-y: auto; padding-b
 
 /* Ranking button on the Interested tab */
 button.add-btn.small-add { font-size: 12px; padding: 4px 12px; margin-left: 6px; }
+
+/* Rank numbers in the middle of each job card */
+.job-ranks { flex: 0 0 150px; font-size: 13px; color: #333; line-height: 1.7; align-self: flex-start; }
+.job-ranks .rank-link { color: #3b3fc4; font-style: italic; font-weight: 700; cursor: pointer; text-decoration: none; }
+.job-ranks .rank-link:hover { text-decoration: underline; }
+.job-ranks .rank-label { font-style: italic; font-weight: 700; color: #777; }
+.rank-overall { font-weight: 700; color: #1f3a5f; }
+.match-table td.val { width: 140px; white-space: nowrap; }
+/* Qualify / Interest Rank Summary pop-up */
+.rank-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 50; display: flex; align-items: flex-start; justify-content: center; padding: 60px 16px; }
+.rank-modal.hidden { display: none; }
+.rank-modal-box { background: #fff; border-radius: 8px; max-width: 620px; width: 100%; max-height: 80vh; overflow-y: auto; padding: 16px 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
+.rank-modal-head { display: flex; justify-content: space-between; align-items: center; }
+.rank-modal-head h3 { margin: 0; color: #1f3a5f; }
+.rank-modal-job { color: #666; font-size: 13px; margin: 2px 0 10px; }
+.rank-modal-box h4 { margin: 12px 0 4px; font-size: 13px; color: #1f3a5f; }
+.mix-row { display: grid; grid-template-columns: 150px 1fr 40px; gap: 8px; align-items: center; font-size: 13px; margin: 3px 0; }
+.mix-bar { height: 8px; background: #edf0f4; border-radius: 4px; overflow: hidden; }
+.mix-bar span { display: block; height: 100%; }
+.mix-likes { background: #1e8e3e; } .mix-ok { background: #f0ad4e; } .mix-minimal { background: #c0392b; } .mix-other { background: #9aa3ad; }
+@media (max-width: 700px) { .job-ranks { flex-basis: auto; } }

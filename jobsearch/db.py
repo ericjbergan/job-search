@@ -809,16 +809,20 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
 MATCH_CRITERIA = ("skills", "interests", "salary", "benefits", "commute")
 
 
+# Her interests in three lists (one item per line), plus "interests" for anything else
+# (industries, things to avoid). ranking.py weights the lists differently.
+PROFILE_FIELDS = {"resume": 60000, "likes": 5000, "ok": 5000, "minimal": 5000, "interests": 10000}
+
+
 def get_profile():
     """Her resume and interests (text), used to score how well jobs match her."""
-    return {"resume": _get_meta("profile_resume") or "", "interests": _get_meta("profile_interests") or ""}
+    return {name: _get_meta(f"profile_{name}") or "" for name in PROFILE_FIELDS}
 
 
-def set_profile(resume=None, interests=None):
-    if resume is not None:
-        _set_meta("profile_resume", resume.strip()[:60000])
-    if interests is not None:
-        _set_meta("profile_interests", interests.strip()[:10000])
+def set_profile(**fields):
+    for name, value in fields.items():
+        if name in PROFILE_FIELDS and value is not None:
+            _set_meta(f"profile_{name}", str(value).strip()[:PROFILE_FIELDS[name]])
 
 
 def get_matches(job_ids=None):

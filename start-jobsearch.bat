@@ -13,6 +13,14 @@ rem Use the Python launcher if present, otherwise whatever python is on PATH
 set PY=python
 where py >nul 2>nul && set PY=py -3
 
+rem After pulling an update that adds a package, install it before starting
+rem (only when requirements.txt changed since the last install, so normal starts stay quick).
+fc /b requirements.txt .requirements-installed >nul 2>nul
+if errorlevel 1 (
+    echo Installing updated requirements...
+    %PY% -m pip install -q --disable-pip-version-check -r requirements.txt && copy /y requirements.txt .requirements-installed >nul
+)
+
 rem Open the browser once the server has had a moment to start
 start "" /b cmd /c "timeout /t 3 /nobreak >nul & start "" http://localhost:5001"
 

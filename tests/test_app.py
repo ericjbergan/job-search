@@ -1244,88 +1244,110 @@ class SkillsTests(FreshDbTest):
 
 
 class RankingTests(FreshDbTest):
-    """Match scores for Interested jobs (the AI is faked)."""
+    """Rank Jobs: every job except Rejected / Not a fit (the AI is faked)."""
 
-    def add_interested(self):
+    def add_jobs(self):
         long = " Requirements: SQL, Jira, stakeholder interviews." * 10
         jobs = [board_job(1, "BA remote", "Columbus, OH"), board_job(2, "BA hybrid", "Dublin, OH"),
-                board_job(3, "BA no pay", "Westerville, OH")]
+                board_job(3, "BA no pay", "Westerville, OH"), board_job(4, "BA rejected", "Columbus, OH"),
+                board_job(5, "BA not a fit", "Columbus, OH")]
         for j in jobs:
             j["job_description"] = j["job_title"] + long
         db.save_results(jobs)
         ids = {j["title"]: j["id"] for j in db.list_jobs()}
         with db.connect() as conn:
-            conn.execute("UPDATE jobs SET status='interested', salary_min=110000, salary_max=130000, salary_period='YEAR', "
+            conn.execute("UPDATE jobs SET status='interested', salary_min=110000, salary_max=140000, salary_period='YEAR', "
                          "work_mode='remote' WHERE id=?", (ids["BA remote"],))
-            conn.execute("UPDATE jobs SET status='interested', salary_min=40, salary_max=44, salary_period='HOUR', "
+            conn.execute("UPDATE jobs SET status='applied', salary_min=55, salary_max=60, salary_period='HOUR', "
                          "work_mode='hybrid' WHERE id=?", (ids["BA hybrid"],))
-            conn.execute("UPDATE jobs SET status='interested' WHERE id=?", (ids["BA no pay"],))
+            conn.execute("UPDATE jobs SET status='rejected' WHERE id=?", (ids["BA rejected"],))
+            conn.execute("UPDATE jobs SET status='not_a_fit' WHERE id=?", (ids["BA not a fit"],))
         return ids
 
     def fake_ai(self, instructions, text, task="listings"):
         self.assertEqual(task, "matching")
-        score = 80 if "BA remote" in text else 50
-        return json.dumps({"skills": {"score": score, "matched": ["SQL"], "partial": [], "missing": ["Jira"], "reason": "ok"},
-                           "interests": {"score": 60, "reason": "fits"}})
+        skills = 80 if "BA remote" in text else 60 if "BA hybrid" in text else 40
+        return json.dumps({"skills": {"score": skills, "matched": ["SQL"], "partial": [], "missing": ["Jira"], "reason": "ok"},
+                           "interests": {"likes": 60, "ok": 0, "minimal": 0, "other": 40, "reason": "fits"}})
 
-    def score(self):
+    def rank_jobs(self):
         from jobsearch import ranking
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test", "AI_MATCHING": "openai"}), \
                 mock.patch.object(ranking.ai, "json_answer", side_effect=self.fake_ai) as fake:
             r = self.client.post("/api/ranking/score")
         return r, fake.call_count
 
-    def test_salary_is_ranked_against_the_others(self):
+    def test_salary_rating_uses_her_thresholds(self):
         from jobsearch import ranking
-        jobs = [{"id": 1, "salary_min": 80000, "salary_max": 80000, "salary_period": "YEAR"},
-                {"id": 2, "salary_min": 48, "salary_max": 48, "salary_period": "HOUR"},       # ~99,840/yr
-                {"id": 3, "salary_min": 120000, "salary_max": None, "salary_period": "YEAR"},
-                {"id": 4}]
-        s = ranking.salary_scores(jobs)
-        self.assertEqual({k: v[0] for k, v in s.items()}, {1: 0, 2: 50, 3: 100})
+        rate = lambda top, period="YEAR": ranking.salary_rating({"salary_max": top, "salary_period": period})[0]
+        self.assertEqual([rate(135000), rate(134999), rate(125000), rate(124999), rate(120000), rate(119999)],
+                         [5, 4, 4, 2, 2, 1])
+        self.assertEqual(rate(65, "HOUR"), 5)                                  # 65 x 2080 = 135,200
+        self.assertEqual(ranking.salary_rating({})[0], 3)                       # no salary listed
+        self.assertEqual(ranking.salary_rating({"salary_min": 130000, "salary_period": "YEAR"})[0], 4)
 
-    def test_benefits_and_commute_scores(self):
+    def test_commute_and_benefit_ratings(self):
         from jobsearch import ranking
-        self.assertEqual(ranking.benefits_score({"retirement_score": 4, "pto_score": 2, "bonus_score": 1})[0], 50)
-        self.assertIsNone(ranking.benefits_score({"retirement_score": 2, "pto_score": 2, "bonus_score": 2}))
-        home = (40.0, -83.0)
-        self.assertEqual(ranking.commute_score({"work_mode": "remote"}, home)[0], 100)
-        self.assertIsNone(ranking.commute_score({"work_mode": "hybrid", "location": "Somewhere"}, home))
-        near = ranking.commute_score({"work_mode": "hybrid", "location": "Columbus, OH"}, home)[0]
-        far = ranking.commute_score({"work_mode": "onsite", "location": "Cleveland, OH"}, home)[0]
-        self.assertGreater(near, far)
+        home = (39.96, -82.99)  # Columbus
+        rate = lambda job, record=None: ranking.commute_rating(job, home, record)[0]
+        self.assertEqual(rate({"work_mode": "remote"}), 4)
+        self.assertEqual(rate({"work_mode": "hybrid", "location": "Dublin, OH"}), 2)
+        self.assertEqual(rate({"work_mode": "hybrid", "location": "Cleveland, OH"}), 1)
+        self.assertEqual(rate({"work_mode": "onsite", "location": "Dublin, OH"}), 1)
+        self.assertEqual(rate({"work_mode": "onsite", "location": "Cleveland, OH"}), 0)
+        self.assertEqual(rate({"location": "Somewhere"}), 3)                     # no info
+        self.assertEqual(rate({"location": "Somewhere"}, {"commute_score": 2.5}), 2.5)
+        self.assertEqual(ranking.benefit_rating(None, "retirement_score", "retirement")[0], 2)
+        self.assertEqual(ranking.benefit_rating({"retirement_score": 4}, "retirement_score", "retirement")[0], 4)
 
-    def test_scoring_needs_a_resume(self):
-        self.add_interested()
-        r, calls = self.score()
-        self.assertEqual((r.status_code, calls), (400, 0))
+    def test_rank_jobs_needs_a_resume_and_nothing_scores_on_its_own(self):
+        self.add_jobs()
+        from jobsearch import ranking
+        with mock.patch.object(ranking.ai, "json_answer") as fake:
+            self.client.post("/api/profile", json={"resume": "Business analyst, 8 years, SQL", "likes": "Requirements"})
+            self.client.get("/api/jobs")
+            self.client.get("/api/ranking")
+        fake.assert_not_called()                                                # only the button reads listings
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test", "AI_MATCHING": "openai"}):
+            self.client.post("/api/profile", json={"resume": ""})
+            r = self.client.post("/api/ranking/score")
+        self.assertEqual(r.status_code, 400)
         self.assertIn("resume", r.get_json()["error"])
 
-    def test_composite_overrides_and_sort(self):
-        ids = self.add_interested()
-        self.client.post("/api/profile", json={"resume": "Business analyst, 8 years, SQL", "interests": "healthcare"})
-        r, calls = self.score()
+    def test_ranks_ratings_and_overall(self):
+        from jobsearch import ranking
+        ids = self.add_jobs()
+        self.client.post("/api/profile", json={"resume": "Business analyst, 8 years, SQL", "likes": "Requirements gathering"})
+        info = self.client.get("/api/ranking").get_json()
+        self.assertEqual((info["count"], info["needs_ai"]), (3, 3))            # Rejected / Not a fit left out
+        r, calls = self.rank_jobs()
         self.assertEqual((r.status_code, r.get_json()["read"], calls), (200, 3, 3))
-        jobs = self.client.get("/api/ranking").get_json()["jobs"]
-        remote = jobs[str(ids["BA remote"])]
-        by = {c["name"]: c for c in remote["criteria"]}
-        self.assertEqual((by["skills"]["score"], by["salary"]["score"], by["commute"]["score"]), (80, 100, 100))
-        self.assertEqual(by["benefits"]["source"], "missing")            # no benefits info: counts as 50
-        self.assertEqual(remote["score"], round((5 * 80 + 4 * 60 + 3 * 100 + 2 * 50 + 1 * 100) / 15))
-        self.assertEqual(remote["missing"], ["Jira"])
-        no_pay = jobs[str(ids["BA no pay"])]
-        self.assertEqual({c["name"]: c["source"] for c in no_pay["criteria"]}["salary"], "missing")
 
-        # Her own score wins, and clearing it goes back to the calculated one.
-        m = self.client.patch(f"/api/jobs/{ids['BA no pay']}/match", json={"skills": 100}).get_json()
-        self.assertEqual({c["name"]: (c["score"], c["source"]) for c in m["criteria"]}["skills"], (100, "yours"))
-        self.assertEqual(self.client.patch(f"/api/jobs/{ids['BA no pay']}/match", json={"skills": 101}).status_code, 400)
-        ordered = self.client.get("/api/jobs?status=interested&sort=match").get_json()
-        scores = [j["match_score"] for j in ordered]
-        self.assertEqual(scores, sorted(scores, reverse=True))
+        jobs = {j["title"]: j for j in self.client.get("/api/jobs?sort=rank").get_json()}
+        self.assertNotIn("rank", jobs["BA rejected"])
+        self.assertNotIn("rank", jobs["BA not a fit"])
+        remote, hybrid, no_pay = jobs["BA remote"]["rank"], jobs["BA hybrid"]["rank"], jobs["BA no pay"]["rank"]
+        self.assertEqual((remote["qualify"], hybrid["qualify"], no_pay["qualify"]), (1, 2, 3))
+        self.assertEqual((remote["interest"], hybrid["interest"]), (1, 1))     # same interest score: tied
+        self.assertEqual((remote["salary"], hybrid["salary"], no_pay["salary"]), (5, 2, 3))   # 60/hr = 124,800
+        self.assertEqual(remote["overall"], 1)
+        ordered = self.client.get("/api/jobs?sort=rank").get_json()
+        self.assertEqual(ordered[0]["title"], "BA remote")
 
-        # Nothing to redo until the resume changes.
-        self.assertEqual(self.score()[1], 0)
+        m = self.client.get(f"/api/jobs/{ids['BA remote']}/match").get_json()
+        # Qualify and Interest count by rank: ranked 1st of 3 = 1.0 (Interest is a three-way tie for 1st).
+        expected = (3 * 1.0 + 3 * 1.0 + 2 * 1.0 + 2 * (1 / 3) + 1 * (1 / 3) + 1 * 1.0 + 1 * (1 / 3)) / 13
+        self.assertEqual(m["overall"], round(100 * expected))
+        self.assertEqual(m["parts"]["commute"]["score"], 4)
+        self.assertEqual(m["missing"], ["Jira"])
+        self.assertEqual(m["weights_order"][:2], ["qualify", "interest"])
+
+        # Her own Qualify score wins; out-of-range is refused; nothing to redo until the resume changes.
+        m = self.client.patch(f"/api/jobs/{ids['BA no pay']}/match", json={"qualify": 100}).get_json()
+        self.assertEqual((m["parts"]["qualify"]["score"], m["parts"]["qualify"]["source"], m["parts"]["qualify"]["rank"]),
+                         (100, "yours", 1))
+        self.assertEqual(self.client.patch(f"/api/jobs/{ids['BA no pay']}/match", json={"qualify": 101}).status_code, 400)
+        self.assertEqual(self.rank_jobs()[1], 0)
         self.client.post("/api/profile", json={"resume": "Business analyst, 9 years, SQL, Jira"})
         self.assertEqual(self.client.get("/api/ranking").get_json()["needs_ai"], 3)
 
@@ -1389,3 +1411,65 @@ class DescriptionTests(FreshDbTest):
     def test_too_long_is_refused(self):
         r = self.client.patch(f"/api/jobs/{self.ids['No text']}", json={"description": "x" * 50001})
         self.assertEqual(r.status_code, 400)
+
+
+class AIPackageTests(unittest.TestCase):
+    """A laptop with the key but not the package (before requirements are reinstalled)."""
+
+    BOTH = {"OPENAI_API_KEY": "o", "ANTHROPIC_API_KEY": "a", "AI_LISTINGS": "", "AI_BENEFITS": "", "AI_MATCHING": ""}
+
+    def test_missing_package_falls_back_to_the_other_ai(self):
+        from jobsearch import ai
+        with mock.patch.dict(os.environ, self.BOTH), \
+                mock.patch.object(ai, "package_installed", side_effect=lambda p: p != "claude"):
+            self.assertEqual(ai.name("benefits"), "ChatGPT")
+
+    def test_clear_message_when_nothing_is_usable(self):
+        from jobsearch import ai
+        env = {**self.BOTH, "OPENAI_API_KEY": ""}
+        with mock.patch.dict(os.environ, env), mock.patch.object(ai, "package_installed", return_value=False):
+            with self.assertRaisesRegex(ai.AIError, "setup.bat"):
+                ai.web_answer("x", "y")
+
+
+class InterestsMixTests(unittest.TestCase):
+    """Interests score = the job's mix of work, weighted by which of her lists it falls in."""
+
+    def test_mix_is_weighted_by_list(self):
+        from jobsearch import ranking
+        p = {"likes": "Analysis", "ok": "KPIs", "minimal": "Managing employees", "interests": ""}
+        self.assertEqual(ranking.interests_from_mix({"likes": 100}, p)[0], 100)
+        self.assertEqual(ranking.interests_from_mix({"minimal": 100}, p)[0], 0)
+        score, mix = ranking.interests_from_mix({"likes": 2, "ok": 1, "minimal": 1, "other": 0}, p)  # not out of 100
+        self.assertEqual(mix, {"likes": 50, "ok": 25, "minimal": 25, "other": 0})
+        self.assertAlmostEqual(score, 50 + 0.25 * 55)
+        # A mostly product-owner / manager job scores well below a mostly-analysis one.
+        po = ranking.interests_from_mix({"likes": 20, "ok": 50, "minimal": 30}, p)[0]
+        ba = ranking.interests_from_mix({"likes": 80, "ok": 20}, p)[0]
+        self.assertLess(po, 50)
+        self.assertGreater(ba, 85)
+
+    def test_other_preferences_count_a_fifth(self):
+        from jobsearch import ranking
+        p = {"likes": "Analysis", "ok": "", "minimal": "", "interests": "Healthcare"}
+        score, _ = ranking.interests_from_mix({"likes": 100, "prefs_score": 0}, p)
+        self.assertAlmostEqual(score, 80)
+        self.assertEqual(ranking.interests_from_mix({}, p), (None, None))
+
+
+class MatchingModelTests(unittest.TestCase):
+    """Job scoring uses Claude Sonnet (with server-side fallback) unless .env says otherwise."""
+
+    def test_matching_defaults_to_sonnet_with_fallback(self):
+        from jobsearch import ai
+        client = mock.MagicMock()
+        client.beta.messages.create.return_value = mock.MagicMock(
+            stop_reason="end_turn", content=[mock.MagicMock(type="text", text='{"skills": {}}')])
+        env = {"OPENAI_API_KEY": "o", "ANTHROPIC_API_KEY": "a", "AI_MATCHING": "", "CLAUDE_MATCHING_MODEL": ""}
+        with mock.patch.dict(os.environ, env), mock.patch.object(ai, "package_installed", return_value=True), \
+                mock.patch.object(ai, "_anthropic", return_value=client):
+            self.assertEqual(ai.name("matching"), "Claude")
+            ai.json_answer("x", "y", task="matching")
+        kwargs = client.beta.messages.create.call_args.kwargs
+        self.assertEqual((kwargs["model"], kwargs["fallbacks"]), ("claude-sonnet-5-5", "default"))
+        client.messages.create.assert_not_called()

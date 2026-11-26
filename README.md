@@ -18,15 +18,24 @@ A small Flask app for running job searches on demand and tracking the results in
 
 The database (`jobs.db`) is created on first run and loaded with the starter companies and searches. The server reloads itself when Python files change, so refreshing the page is enough to pick up edits.
 
-## Ranking Interested jobs
+## Ranking jobs
 
-Paste her resume (or load a .docx/.txt) and her interests in the **Ranking Interested jobs** card, then
-click **Score**. Each Interested job gets a 0-100 match score from five parts, weighted by importance:
-skills & qualifications ×5 and interests ×4 (ChatGPT compares the listing with her resume and interests),
-salary ×3 (ranked against the other Interested jobs), benefits ×2 (the company's benefit scores) and
-commute ×1 (remote best, then distance from home). Anything unknown counts as 50. Open a job to see the
-breakdown, what she meets or is missing, and to set her own score for any part. Sort by **Best match**
-to rank them. The resume and interests stay in her local database.
+Paste her resume (or load a .docx/.txt) and her interests (three lists: work she likes, fine in small doses,
+keep to a minimum) in the **Resume & interests** card, then click **Rank Jobs** above the job list. Every
+job except Rejected and Not a fit gets rank numbers, shown in the middle of each job card:
+
+- **Qualify** and **Interest**: Claude Sonnet compares each listing with her resume and interest lists
+  (only when she clicks Rank Jobs, never on its own), and the jobs are ranked 1 = best. Click the label
+  for the Qualify / Interest Rank Summary (what she meets or is missing; the job's mix of work).
+- **Salary Rating** on the top of the pay range: 5 = $135k+, 4 = $125-135k, 3 = not listed,
+  2 = $120-125k, 1 = under $120k.
+- **Retirement, Sick & PTO, Bonus**: the company's 1-4 ratings from the Benefits panel (2 = no info);
+  **Commute**: the spreadsheet's 0-4 scale from work style and distance.
+- **Overall**: Qualify ×3, Interest ×3, Salary ×2, Retirement ×2, Sick & PTO ×1, Commute ×1, Bonus ×1.
+  Qualify and Interest count by their rank, so they carry their full weight. Sort by **Overall rank**.
+
+Opening a job shows the full breakdown, where she can also set her own Qualify / Interest score.
+The resume and interests stay in her local database.
 
 ## ChatGPT or Claude
 
@@ -34,11 +43,12 @@ Each AI step uses the service that did it best in a side-by-side test:
 
 - **Reading listings** (pasted text, filling in missing details): ChatGPT (`OPENAI_API_KEY`). The two were about even.
 - **Benefits lookups** (benefits pages and web search): Claude (`ANTHROPIC_API_KEY`). It found real figures with quotes.
+- **Scoring Interested jobs** (resume and interests vs the listing): Claude Sonnet. It read her resume accurately and judged each job's mix of work; ChatGPT missed tools on her resume.
 
-Change either in `.env` with `AI_LISTINGS=openai|claude` and `AI_BENEFITS=openai|claude`. If the chosen
+Change any of them in `.env` with `AI_LISTINGS`, `AI_BENEFITS` or `AI_MATCHING` (`openai` or `claude`). If the chosen
 service's key isn't in `.env`, the other one is used, so a laptop with only an OpenAI key still works.
 Optional model settings: `OPENAI_MODEL` (default gpt-4o-mini), `CLAUDE_MODEL` (default claude-haiku-5-5,
-reads text) and `CLAUDE_WEB_MODEL` (default claude-sonnet-5-5, benefits web search).
+reads text) and `CLAUDE_WEB_MODEL` (default claude-sonnet-5-5, benefits web search) and `CLAUDE_MATCHING_MODEL` (default claude-sonnet-5-5, job scoring).
 
 To compare the two on the same saved jobs (nothing saved is changed), with both keys in `.env`:
 

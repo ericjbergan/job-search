@@ -168,25 +168,35 @@
             <section class="panel collapsible" id="profilePanel">
                 <div class="panel-head">
                     <h2 class="collapse-toggle" onclick="togglePanel('profilePanel')" title="Show or hide">
-                        <span class="chev">▾</span> Ranking Interested jobs</h2>
+                        <span class="chev">▾</span> Resume &amp; interests</h2>
                 </div>
                 <div class="panel-body">
-                    <p class="hint">Each Interested job gets a match score (0-100) from five things, most important first:
-                        skills &amp; qualifications ×5, interests ×4, salary ×3 (compared with the other Interested jobs),
-                        benefits ×2, commute ×1. Sort by <b>Best match</b> to rank them.</p>
+                    <p class="hint">Used by <b>Rank Jobs</b> (above the job list) to rank every job except Rejected and
+                        Not a fit. Overall rank weighs Qualify ×3, Interest ×3, Salary ×2, Retirement ×2, Sick &amp; PTO ×1,
+                        Commute ×1 and Bonus ×1. Qualify and Interest are read from the listings only when she clicks Rank Jobs.</p>
                     <label>Her resume
                         <textarea id="pResume" rows="5" placeholder="Paste the resume text, or load a Word (.docx) or .txt file"></textarea>
                     </label>
                     <button type="button" class="small secondary" onclick="document.getElementById('pResumeFile').click()">Load resume file…</button>
                     <input type="file" id="pResumeFile" accept=".docx,.txt" class="hidden" onchange="loadResumeFile(this)">
-                    <label>Her interests
-                        <textarea id="pInterests" rows="4" placeholder="Industries, kinds of work, what she enjoys, anything she wants to avoid"></textarea>
+                    <p class="hint interests-hint">Her interests, one per line. Each job's work is split across these
+                        lists: work she likes counts 100, fine in small doses 55, keep to a minimum 0, anything not listed 35.</p>
+                    <label>Work she likes
+                        <textarea id="pLikes" rows="4" placeholder="e.g. Requirements gathering&#10;Process improvement&#10;Root cause analysis"></textarea>
+                    </label>
+                    <label>Fine in small doses (not the main job)
+                        <textarea id="pOk" rows="3" placeholder="e.g. KPI analysis&#10;Prioritization"></textarea>
+                    </label>
+                    <label>Keep to a minimum
+                        <textarea id="pMinimal" rows="3" placeholder="e.g. Managing employees&#10;Budgets&#10;Strategic planning"></textarea>
+                    </label>
+                    <label>Anything else (optional)
+                        <textarea id="pInterests" rows="2" placeholder="Industries, kinds of company, things to avoid"></textarea>
                     </label>
                     <div class="buttons">
                         <button type="button" class="small" onclick="saveProfile(this)">Save</button>
-                        <button type="button" class="small" id="scoreJobsBtn" onclick="scoreJobs(this)">Score Interested jobs</button>
                     </div>
-                    <span class="hint">Kept only on this computer. The resume, interests and each listing are sent to ChatGPT when scoring.</span>
+                    <span class="hint" id="pPrivacyHint">Kept only on this computer. The resume, interests and each listing are sent to the AI when scoring.</span>
                     <div id="rankStatus" class="hint"></div>
                 </div>
             </section>
@@ -239,7 +249,7 @@
                         <input type="checkbox" id="noDescFilter" onchange="loadJobs()"> No description</label>
                     <button type="button" class="small hidden" id="fillDescBtn" onclick="fillMissingDescriptions(this)"
                             title="Try Reload from listing on each of these jobs">Reload these from their listings</button>
-                    <button type="button" class="add-btn small-add hidden" id="rankBtn" onclick="rankButtonClick(this)">Score Interested jobs</button>
+                    <button type="button" class="add-btn small-add" id="rankBtn" onclick="rankButtonClick(this)">Rank Jobs</button>
                 </div>
                 <div class="filter-row">
                     <input id="textFilter" placeholder="Filter by title, company, description, notes" oninput="debouncedLoadJobs()">
@@ -259,7 +269,7 @@
                     </select>
                     <select id="sortJobs" onchange="loadJobs()" title="Sort jobs">
                         <option value="found">Newest found</option>
-                        <option value="match">Best match (Interested)</option>
+                        <option value="rank">Overall rank</option>
                         <option value="posted">Newest posted</option>
                         <option value="pay">Highest pay</option>
                         <option value="closes">Closing soonest</option>

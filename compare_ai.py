@@ -3,6 +3,7 @@
     python compare_ai.py                      # 10 saved jobs that have descriptions
     python compare_ai.py --jobs 20            # more jobs
     python compare_ai.py --benefits "Cardinal Health" "Huntington"   # also compare benefits web searches
+    python compare_ai.py --matching           # compare scoring her Interested jobs (resume + interests)
 
 Both keys must be in .env (OPENAI_API_KEY and ANTHROPIC_API_KEY). The report is written to
 ai-comparison.html (it holds her job data, so git ignores it) and opened in the browser.
@@ -22,7 +23,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from jobsearch import ai, benefits, boards, db, importer  # noqa: E402  (after .env is loaded)
+from jobsearch import ai, benefits, boards, db, importer, ranking  # noqa: E402  (after .env is loaded)
 
 FIELDS = ["title", "company", "location", "work_style", "pay", "req_number", "employment_type",
           "posted_date", "closing_date"]
@@ -117,18 +118,120 @@ def benefits_section(company):
     return f'<section><h2>Benefits: {html.escape(company)}</h2><div class="cols">{"".join(cols)}</div></section>'
 
 
+# --- job scoring (resume + interests vs listing) ---------------------------------------------
+
+# (provider, label, Claude model or None)
+MATCH_SIDES = [("openai", "ChatGPT gpt-4o-mini", None), ("claude", "Claude Haiku 5.5", "claude-haiku-5-5"),
+               ("claude", "Claude Sonnet 5.5", "claude-sonnet-5-5")]
+_FILLER = set("""experience with in of and the a an strong skills skill knowledge ability years year using tools tool
+working proven excellent plus or to for on at as hands background understanding familiarity proficiency proficient
+demonstrated related relevant specific direct other similar etc including such required preferred systems system
+data business analysis analyst work job role level senior minimum least degree software platform platforms""".split())
+
+
+def misread_missing(missing, resume):
+    """Missing items whose key words are in her resume after all (likely misreads)."""
+    words = set(re.findall(r"[a-z0-9+#]+", resume.lower()))
+    flagged = []
+    for item in missing:
+        keys = [w for w in re.findall(r"[a-z0-9+#]+", item.lower()) if len(w) >= 3 and w not in _FILLER]
+        hits = [w for w in keys if w in words]
+        if hits:
+            flagged.append((item, hits))
+    return flagged
+
+
+def score_with(side, profile, description):
+    provider, _, model = side
+    before = os.environ.get("CLAUDE_MATCHING_MODEL")
+    if model:
+        os.environ["CLAUDE_MATCHING_MODEL"] = model
+    start = time.time()
+    try:
+        with ai.using(provider):
+            skills, interests, details = ranking.read_match(profile, description)
+        return {"skills": skills, "interests": interests, "details": details, "secs": time.time() - start}
+    except Exception as e:
+        return {"error": str(e), "secs": time.time() - start}
+    finally:
+        if model:
+            if before is None:
+                os.environ.pop("CLAUDE_MATCHING_MODEL", None)
+            else:
+                os.environ["CLAUDE_MATCHING_MODEL"] = before
+
+
+def matching_sections(status="interested"):
+    profile = db.get_profile()
+    if not profile["resume"]:
+        sys.exit("Save her resume in the app first (Ranking Interested jobs)")
+    jobs = [db.get_job(j["id"]) for j in db.list_jobs(status=status)]
+    jobs = [j for j in jobs if len(j.get("description") or "") >= 200]
+    results = {}
+    for i, job in enumerate(jobs, 1):
+        print(f"[scoring {i}/{len(jobs)}] {job['title']}")
+        results[job["id"]] = [score_with(s, profile, job["description"]) for s in MATCH_SIDES]
+
+    # Summary: each model's order, how often it flagged something she has, time.
+    rows = []
+    for k, side in enumerate(MATCH_SIDES):
+        ok = [(j, results[j["id"]][k]) for j in jobs if "error" not in results[j["id"]][k]]
+        misreads = sum(len(misread_missing(r["details"]["missing"], profile["resume"])) for _, r in ok)
+        mixes = {json.dumps(r["details"].get("work_mix"), sort_keys=True) for _, r in ok}
+        secs = sum(r["secs"] for j in jobs for r in [results[j["id"]][k]])
+        order = sorted(ok, key=lambda jr: -((jr[1]["skills"] or 0) * 5 + (jr[1]["interests"] or 0) * 4))
+        ranked = []
+        for j, r in order:
+            ranked.append("%s <small>(skills %.0f, interests %.0f)</small>"
+                          % (html.escape(j["title"][:45]), r["skills"] or 0, r["interests"] or 0))
+        rows.append(f"<tr><th>{side[1]}</th><td>{misreads}</td><td>{len(mixes)} of {len(ok)}</td><td>{secs:.0f}s</td>"
+                    f"<td>{'<br>'.join(ranked)}</td></tr>")
+    summary = f"""<section><h2>Job scoring: summary</h2>
+<p>Same resume, interests, listings and instructions for each. <b>Missing items she actually has</b> counts
+“missing” qualifications whose key word appears in her resume (likely misreads; fewer is better).
+<b>Different work mixes</b>: how many distinct interest splits it gave (more means it read each job, not a template).</p>
+<table><tr><th>Model</th><th>Missing items she has</th><th>Different work mixes</th><th>Time</th><th>Order by skills×5 + interests×4</th></tr>
+{''.join(rows)}</table></section>"""
+
+    sections = [summary]
+    for job in jobs:
+        cols = []
+        for side, r in zip(MATCH_SIDES, results[job["id"]]):
+            if "error" in r:
+                cols.append(f"<div><h3>{side[1]}</h3><p class='err'>{html.escape(r['error'])}</p></div>")
+                continue
+            d = r["details"]
+            flagged = dict(misread_missing(d["missing"], profile["resume"]))
+            miss = "".join(f"<li>{html.escape(m)}" + (f" <span class='bad'>⚠ resume mentions {', '.join(flagged[m])}</span>" if m in flagged else "")
+                           + "</li>" for m in d["missing"])
+            lst = lambda items: "".join(f"<li>{html.escape(x)}</li>" for x in items) or "<li class='none'>—</li>"
+            cols.append(f"""<div><h3>{side[1]} <small>{r['secs']:.1f}s</small></h3>
+<p><b>Skills {r['skills']:.0f}</b>: {html.escape(d['skills_reason'])}</p>
+<p><b>Interests {(r['interests'] or 0):.0f}</b>: {html.escape(d['interests_reason'])}</p>
+<h4>Meets</h4><ul>{lst(d['matched'])}</ul><h4>Partly</h4><ul>{lst(d['partial'])}</ul>
+<h4>Missing</h4><ul>{miss or "<li class='none'>—</li>"}</ul></div>""")
+        sections.append(f"""<section><h2>{html.escape(job['title'])} <small>{html.escape(job['company'] or '')}</small></h2>
+<div class="cols3">{''.join(cols)}</div>
+<details><summary>Listing text</summary><pre>{html.escape(job['description'][:15000])}</pre></details></section>""")
+    return sections
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--jobs", type=int, default=10, help="how many saved jobs to compare (default 10)")
+    ap.add_argument("--jobs", type=int, default=None, help="how many saved jobs to compare listing reads on (default 10)")
     ap.add_argument("--benefits", nargs="*", default=[], metavar="COMPANY", help="companies to compare benefits web searches for")
+    ap.add_argument("--matching", action="store_true",
+                    help="compare scoring her Interested jobs against her resume and interests (ChatGPT, Claude Haiku, Claude Sonnet)")
     args = ap.parse_args()
     missing = [ai.PROVIDERS[p][1] for p, _ in SIDES if not ai.key_set(p)]
     if missing:
         sys.exit(f"Add {' and '.join(missing)} to .env first")
+    if args.jobs is None:
+        args.jobs = 0 if (args.matching or args.benefits) else 10
 
     db.init_db()
-    sections = []
-    jobs = jobs_to_compare(args.jobs)
+    sections = matching_sections() if args.matching else []
+    jobs = jobs_to_compare(args.jobs) if args.jobs else []
     for i, job in enumerate(jobs, 1):
         print(f"[{i}/{len(jobs)}] {job['title']} ({job['company']})")
         text = re.sub(r"\n{3,}", "\n\n", job["description"].strip())[:importer.MAX_TEXT]
@@ -148,6 +251,8 @@ th {{ width: 130px; color: #555; font-weight: 600; }} tr.diff {{ background: #ff
 .err {{ color: #c0392b; }} .meta {{ color: #777; font-size: 13px; margin-top: -6px; }}
 pre {{ white-space: pre-wrap; font-size: 12px; max-height: 300px; overflow: auto; background: #fafafa; padding: 8px; }}
 .cols {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
+.cols3 {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; font-size: 13px; }}
+h4 {{ margin: 8px 0 2px; }} ul {{ margin: 0; padding-left: 18px; }}
 </style>
 <h1>ChatGPT ({ai.openai_model()}) vs Claude ({ai.claude_model()}; web: {ai.claude_web_model()})</h1>
 <p>Rows where the two disagree are highlighted. “✗ not in text” means that value isn't in the listing, so it was guessed;
