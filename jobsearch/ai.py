@@ -5,14 +5,14 @@ Each task uses the AI that did it best in a side-by-side test (compare_ai.py):
   * "benefits" - benefits lookups (reading benefits pages, web search): Claude (found real figures with quotes).
   * "matching" - scoring a job against her resume and interests (ranking.py): Claude Sonnet (read her
     resume accurately and judged each job's mix of work; ChatGPT missed tools on her resume and used a template).
-  * "applications" - answering application form questions (autofill.py): Claude Sonnet, same model as matching
-    (it drafts answers in her voice from her resume).
+  * "applications" - Tailor resume (tailor.py): Claude Sonnet, same model as matching
+    (it rewords her resume for one listing without adding anything she hasn't done).
 Change any of them in .env with AI_LISTINGS / AI_BENEFITS / AI_MATCHING / AI_APPLICATIONS = openai|claude. If the chosen one's
 key (OPENAI_API_KEY / ANTHROPIC_API_KEY) or package isn't there, the other one is used, so a laptop with only
 an OpenAI key keeps working.
 
 Models can be changed in .env: OPENAI_MODEL, CLAUDE_MODEL (reading text), CLAUDE_WEB_MODEL (web search),
-CLAUDE_MATCHING_MODEL (job scoring and application answers).
+CLAUDE_MATCHING_MODEL (job scoring and Tailor resume).
 """
 
 import contextlib

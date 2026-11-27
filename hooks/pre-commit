@@ -3,7 +3,7 @@
 # Installed by setup.bat (git config core.hooksPath hooks).
 #   - databases (jobs.db, demo.db, ...) hold Jen's job-search records
 #   - .env holds API keys; the comparison report and spreadsheets hold her job data
-#   - .browser-* folders hold Fill application's browser profile (her sign-ins to job sites)
+#   - .browser-* folders (left by the removed Fill application) hold her sign-ins to job sites
 #   - any API key value, whether from .env or one that looks like a key
 
 status=0

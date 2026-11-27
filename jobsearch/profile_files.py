@@ -39,7 +39,7 @@ def profile_dir():
 
 
 def resume_path():
-    """Her resume file in profile/ (what Fill application uploads), or None."""
+    """Her resume file in profile/ (what Tailor resume starts from), or None."""
     for name in RESUME_NAMES:
         path = os.path.join(profile_dir(), name)
         if os.path.exists(path):

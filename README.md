@@ -37,30 +37,14 @@ job except Applied, Rejected and Not a fit gets rank numbers, shown in the middl
 Opening a job shows the full breakdown, where she can also set her own Qualify / Interest score.
 The resume and interests stay in her local database.
 
-## Filling in applications
-
-Fill in the **Application info** card once (name, contact details, work authorization, salary answer,
-voluntary EEO answers). Then open a job and click **Fill application**: the app opens the job's link in
-its own Google Chrome window (Edge if Chrome is missing). Click Apply there and sign in if the site asks (sign-ins are remembered in
-a git-ignored `.browser-jobs` folder). On each page of the form, click **Fill this page** in the panel at the
-bottom right of the app:
-
-- her saved info goes in directly (outlined green), and `profile/Resume.docx` is uploaded where a resume is asked for;
-- the other questions are answered by Claude Sonnet from her resume and the listing (outlined orange: check these);
-- passwords, Social Security numbers, birth dates, agreement boxes and text-message opt-ins are left for her;
-- it never submits. She checks the page, goes on to the next, and submits herself.
-
-Phone, email, street and ZIP are typed in directly and never sent to the AI. Sites differ a lot, so some
-fields (especially Workday's) may be missed; the panel lists what still needs her.
-
 ## Tailoring her resume to a job
 
 Open a job and click **Tailor resume**. Claude Sonnet suggests changes to `profile/Resume.docx` for that
 listing: a summary that leads with what the job cares about, bullets reworded and reordered within each job,
 and skills lines reordered. Each change shows before (gray) and after (green); she ticks the ones she wants
 and clicks **Save tailored resume**. That saves a Word copy, same layout, in OneDrive's
-`Job Search tailored resumes` folder (or `TAILORED_DIR`), named `Resume - Company - Title.docx`, and
-**Fill application** uploads that copy for that job. Her own resume file is never changed.
+`Job Search tailored resumes` folder (or `TAILORED_DIR`), named `Resume - Company - Title.docx`, ready to upload
+when she applies. Her own resume file is never changed.
 
 It stays within her real experience: names, contact details, employers, titles and dates are never
 changed, a skills line keeps exactly the same items, and any tool, name or number in a suggestion that isn't
@@ -74,13 +58,12 @@ Each AI step uses the service that did it best in a side-by-side test:
 - **Reading listings** (pasted text, filling in missing details): ChatGPT (`OPENAI_API_KEY`). The two were about even.
 - **Benefits lookups** (benefits pages and web search): Claude (`ANTHROPIC_API_KEY`). It found real figures with quotes.
 - **Scoring Interested jobs** (resume and interests vs the listing): Claude Sonnet. It read her resume accurately and judged each job's mix of work; ChatGPT missed tools on her resume.
-- **Application questions and Tailor resume**: Claude Sonnet, writing from her resume.
+- **Tailor resume**: Claude Sonnet, rewording her resume for a listing.
 
-Change any of them in `.env` with `AI_LISTINGS`, `AI_BENEFITS`, `AI_MATCHING` or `AI_APPLICATIONS` (`openai` or `claude`). If the chosen
+Change any of them in `.env` with `AI_LISTINGS`, `AI_BENEFITS`, `AI_MATCHING` or `AI_APPLICATIONS` (Tailor resume) (`openai` or `claude`). If the chosen
 service's key isn't in `.env`, the other one is used, so a laptop with only an OpenAI key still works.
 Optional model settings: `OPENAI_MODEL` (default gpt-4o-mini), `CLAUDE_MODEL` (default claude-haiku-5-5,
-reads text) and `CLAUDE_WEB_MODEL` (default claude-sonnet-5-5, benefits web search) and `CLAUDE_MATCHING_MODEL` (default claude-sonnet-5-5, job scoring and application answers).
-`APPLY_BROWSER` picks the Fill application browser: `chrome` (default), `msedge` or `chromium`.
+reads text) and `CLAUDE_WEB_MODEL` (default claude-sonnet-5-5, benefits web search) and `CLAUDE_MATCHING_MODEL` (default claude-sonnet-5-5, job scoring and Tailor resume).
 
 To compare the two on the same saved jobs (nothing saved is changed), with both keys in `.env`:
 

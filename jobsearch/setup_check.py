@@ -17,7 +17,7 @@ REQUIREMENTS = os.path.join(REPO_DIR, "requirements.txt")
 MARKER = os.path.join(REPO_DIR, ".requirements-installed")
 # package name in requirements.txt -> the name it's imported by
 IMPORT_NAMES = {"flask": "flask", "requests": "requests", "python-dotenv": "dotenv", "openai": "openai",
-                "anthropic": "anthropic", "playwright": "playwright"}
+                "anthropic": "anthropic"}
 
 
 def _read(path):

@@ -26,5 +26,5 @@ ai-comparison.html
 # Marker: requirements already installed on this computer (see start-jobsearch.bat)
 .requirements-installed
 
-# Fill application's browser profile (her sign-ins to job sites)
+# Browser profile left by the removed Fill application (her sign-ins to job sites); safe to delete
 .browser-*/

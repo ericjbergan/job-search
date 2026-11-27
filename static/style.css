@@ -439,24 +439,8 @@ button.add-btn.small-add { font-size: 12px; padding: 4px 12px; margin-left: 6px;
 .dup-note.relist { background: #fff4e0; border: 1px solid #f3cf8f; color: #6b3d00; }
 .dup-note .badge { font-size: 11px; }
 
-/* Fill application */
-.apply-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; }
-.apply-grid label { font-size: 12px; margin: 0; }
-.apply-grid .wide { grid-column: 1 / -1; }
-.apply-grid input, .apply-grid select { width: 100%; box-sizing: border-box; }
-button.fill-app-btn { background: #2e9e5b; }
-.fill-bar { position: fixed; right: 16px; bottom: 16px; width: 360px; max-width: calc(100vw - 32px);
-            max-height: 70vh; overflow-y: auto; background: #fff; border: 1px solid #ccc; border-radius: 8px;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, .2); padding: 10px 12px; z-index: 50; font-size: 13px; }
-.fill-head { display: flex; align-items: baseline; gap: 6px; }
-.fill-head span { flex: 1; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* close button on pop-up boxes */
 .fill-x { background: none; color: #666; padding: 0 4px; font-size: 14px; }
-.fill-result ul { margin: 2px 0 6px 18px; padding: 0; }
-.fill-summary { font-weight: 600; margin-top: 6px; }
-.fill-drafted b { color: #b26b00; }
-.fill-needs b { color: #b3261e; }
-.fill-done b { color: #2e7d4f; }
-.fill-note { color: #b3261e; margin: 4px 0; }
 
 /* Tailor resume */
 .tailor-box { max-width: 820px; }

@@ -14,7 +14,7 @@ Exception, by Eric's decision (2026-11-26): `profile/Resume.docx` and `profile/i
 committed on purpose (her resume is already public), so a fresh install fills the Resume & interests
 card. Rank Jobs strips phone numbers and emails before sending the resume to the AI.
 - never import or store the spreadsheet's "Log in Info" column (passwords)
-- the `.browser-*` folders: Fill application's browser profile, holding her sign-ins to job sites
+- the `.browser-*` folders left by the removed Fill application: they hold her sign-ins to job sites
 
 Commit only files named explicitly (`git add path1 path2`, never `git add -A` / `.`), and run
 `git status --short` first. The pre-commit hook in `hooks/` blocks databases, `.env` and key values;
@@ -50,9 +50,6 @@ edit tell Eric to **refresh the page**; mention a restart only when one is reall
   Claude (`AI_BENEFITS`), each falling back to whichever key is present.
 - Values read by AI are checked against the source text before they're saved (see `importer.fill_gaps`,
   `benefits._quoted_figures`). Keep that pattern for anything new.
-- Fill application (`jobsearch/autofill.py`) never submits a form, never fills passwords / SSN / birth
-  dates / bank details, and leaves agreement and consent boxes for her. Phone, email, street and ZIP are
-  never sent to the AI. All Playwright calls run on its one worker thread.
 - Tailor resume (`jobsearch/tailor.py`) never edits `profile/Resume.docx`; it writes a copy. Only the summary,
   bullets (within one job) and skills-line order may change, and `check_changes` enforces that and flags
   anything not in her resume. Keep those limits.
