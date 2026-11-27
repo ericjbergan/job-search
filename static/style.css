@@ -443,17 +443,28 @@ button.add-btn.small-add { font-size: 12px; padding: 4px 12px; margin-left: 6px;
 .fill-x { background: none; color: #666; padding: 0 4px; font-size: 14px; }
 
 /* Tailor resume */
-.tailor-box { max-width: 820px; }
-.tailor-change { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid #eee;
-                 font-size: 13px; cursor: pointer; }
-.tailor-change input { margin-top: 3px; }
+.tailor-box { max-width: 900px; }
+.tailor-part { margin: 18px 0 6px; padding-top: 8px; border-top: 2px solid #1f3a5f; font-size: 15px !important; }
+.tailor-kw { margin: 10px 0 14px; }
+.tailor-kw-head { font-size: 14px; margin-bottom: 4px; }
+.tailor-kw-name { font-weight: 600; color: #1f3a5f; background: #e8eef7; border-radius: 4px; padding: 1px 7px; }
+.tailor-place { font-size: 13px; padding: 8px 0 10px 12px; border-left: 3px solid #e3e8ef; margin: 6px 0; }
 .tailor-where { color: #555; margin-bottom: 4px; }
 .tailor-where b { color: #1f3a5f; }
-.tailor-before { color: #777; background: #f4f5f7; border-radius: 4px; padding: 5px 8px; margin-bottom: 4px; }
+.tailor-label { color: #666; font-size: 12px; margin: 6px 0 2px; display: flex; align-items: center; gap: 8px; }
+.tailor-label .small { padding: 1px 8px; font-size: 12px; }
+.tailor-before { color: #555; background: #f4f5f7; border-radius: 4px; padding: 5px 8px; }
+.tailor-before s { color: #b3261e; }
 .tailor-after { background: #e8f5ec; border-radius: 4px; padding: 5px 8px; }
-.tailor-order { margin: 4px 0 0 18px; padding: 0; }
-.tailor-order li { margin-bottom: 3px; }
+.tailor-after b { color: #14532d; }
+.tailor-text { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; }
+.tailor-text.changed { border-color: #2e7d4f; background: #fbfffc; }
+.tailor-box-note { font-size: 12px; color: #777; margin-top: 2px; }
+.tailor-changed { color: #2e7d4f; }
+.tailor-advice-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
+.tailor-advice { flex: 1 1 300px; }
+.tailor-advice ul { margin: 2px 0 0 18px; padding: 0; }
+.tailor-advice li { margin-bottom: 2px; }
 .tailor-warn { color: #b3261e; background: #fdecea; border-radius: 4px; padding: 4px 8px; margin-bottom: 4px; }
-.tailor-gaps { margin: 10px 0; padding: 8px 10px; background: #fff7e0; border-radius: 6px; font-size: 13px; }
 .tailor-saved { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 13px; color: #2e7d4f; }
 .tailor-done { color: #2e7d4f; font-size: 13px; }

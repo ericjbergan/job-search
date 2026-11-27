@@ -179,6 +179,7 @@
                     </label>
                     <button type="button" class="small secondary" onclick="document.getElementById('pResumeFile').click()">Load resume file…</button>
                     <input type="file" id="pResumeFile" accept=".docx,.txt" class="hidden" onchange="loadResumeFile(this)">
+                    <span class="hint" id="pTailorSource"></span>
                     <p class="hint interests-hint">Her interests, one per line. Rank Jobs estimates what share of each job's
                         work falls in each list; the number is how much that kind of work counts (0-100).</p>
                     <label class="weighted">Work she likes <span class="weight-box">counts <input type="number" id="pLikesW" min="0" max="100" step="5"></span>

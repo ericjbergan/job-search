@@ -39,17 +39,26 @@ The resume and interests stay in her local database.
 
 ## Tailoring her resume to a job
 
-Open a job and click **Tailor resume**. Claude Sonnet suggests changes to `profile/Resume.docx` for that
-listing: a summary that leads with what the job cares about, bullets reworded and reordered within each job,
-and skills lines reordered. Each change shows before (gray) and after (green); she ticks the ones she wants
-and clicks **Save tailored resume**. That saves a Word copy, same layout, in OneDrive's
-`Job Search tailored resumes` folder (or `TAILORED_DIR`), named `Resume - Company - Title.docx`, ready to upload
-when she applies. Her own resume file is never changed.
+Open a job and click **Tailor resume**. It starts from the Word resume she last loaded with
+**Load resume file…** (kept in the database), or `profile/Resume.docx` if she hasn't loaded one. Claude Sonnet
+reads it against the listing and shows two parts:
 
-It stays within her real experience: names, contact details, employers, titles and dates are never
-changed, a skills line keeps exactly the same items, and any tool, name or number in a suggestion that isn't
-in her resume is flagged in red and starts unticked. What the listing asks for that her resume doesn't show
-is listed as gaps. Suggestions are saved per job, so reopening costs nothing until the resume or listing changes.
+- **Keywords** an applicant tracking system would look for that her resume doesn't have. Each has one to three
+  places it could fit (her summary, a bullet under a job, or a skills section), showing the text now and the
+  suggested text with the new words in bold.
+- **Skills sections** (Key Skills, Common Artifacts Produced, Recent Tools & Technology): her items now, the
+  suggested items (new ones in bold, ones to take off struck out, most relevant first), and which items are
+  important to keep for this job and which she could take off.
+
+Every place has a box holding what goes in her resume. It starts as her resume reads now; **Use suggestion**
+copies the suggested wording in, and she edits it however she likes. **Save suggested resume** writes a Word copy,
+same layout, with every box she changed, in OneDrive's `Job Search tailored resumes` folder (or `TAILORED_DIR`),
+named `<Company>-<Job Title> - Suggested Resume.docx`. Her own resume file is never changed.
+
+Keywords must appear in the listing and be missing from her resume. Words new to her resume are flagged in red:
+she keeps only what's true. Names, contact details, headings, employers, titles and dates can't be changed.
+Suggestions and her boxes are kept per job, so reopening costs nothing until the resume or listing changes;
+**Ask again** gets new suggestions and keeps her boxes.
 
 ## ChatGPT or Claude
 
@@ -58,7 +67,7 @@ Each AI step uses the service that did it best in a side-by-side test:
 - **Reading listings** (pasted text, filling in missing details): ChatGPT (`OPENAI_API_KEY`). The two were about even.
 - **Benefits lookups** (benefits pages and web search): Claude (`ANTHROPIC_API_KEY`). It found real figures with quotes.
 - **Scoring Interested jobs** (resume and interests vs the listing): Claude Sonnet. It read her resume accurately and judged each job's mix of work; ChatGPT missed tools on her resume.
-- **Tailor resume**: Claude Sonnet, rewording her resume for a listing.
+- **Tailor resume**: Claude Sonnet, finding missing keywords and suggesting skills changes for a listing.
 
 Change any of them in `.env` with `AI_LISTINGS`, `AI_BENEFITS`, `AI_MATCHING` or `AI_APPLICATIONS` (Tailor resume) (`openai` or `claude`). If the chosen
 service's key isn't in `.env`, the other one is used, so a laptop with only an OpenAI key still works.

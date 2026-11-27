@@ -22,7 +22,20 @@ os.environ["JOBSEARCH_DB"] = os.path.join(_tmp.name, "test.db")
 os.environ.setdefault("JSEARCH_API_KEY", "test-key")
 
 import app as app_module  # noqa: E402
-from jobsearch import boards, db  # noqa: E402
+from jobsearch import ai as _ai, boards, db  # noqa: E402
+
+
+def _no_real_ai(service):
+    def refuse(*args, **kwargs):
+        raise AssertionError(f"A test tried to reach {service} for real. Patch the AI call "
+                             "(ai.json_answer, ai.web_answer or ai._anthropic / ai._openai) in that test.")
+    return refuse
+
+
+# Safety net: no test may build a real AI client, whatever keys .env holds or packages are installed.
+# Tests that check the calls patch ai._anthropic / ai._openai themselves, which overrides this.
+mock.patch.object(_ai, "_openai", side_effect=_no_real_ai("OpenAI")).start()
+mock.patch.object(_ai, "_anthropic", side_effect=_no_real_ai("Claude")).start()
 
 
 def sample_results():
@@ -1154,6 +1167,14 @@ class JobHuntImportTests(FreshDbTest):
 class AIProviderTests(unittest.TestCase):
     """The ChatGPT / Claude switch in jobsearch/ai.py (no real calls are made)."""
 
+    def setUp(self):
+        # Both AI packages count as installed, so the switch doesn't fall back to the other AI on a computer
+        # missing one (tests about a missing package patch this themselves).
+        from jobsearch import ai
+        installed = mock.patch.object(ai, "package_installed", return_value=True)
+        installed.start()
+        self.addCleanup(installed.stop)
+
     def block(self, type_, **kw):
         return mock.MagicMock(type=type_, **kw)
 
@@ -1644,8 +1665,14 @@ TEST_RESUME = [
     ("", [("Newark, OH | jane@example.com", False)]),
     ("Heading1", [("PROFESSIONAL SUMMARY", False)]),
     ("", [("Business analyst with 10 years of experience gathering requirements and leading UAT for retail systems.", False)]),
-    ("Heading1", [("SKILLS", False)]),
-    ("", [("Key Skills: ", True), ("SQL • Jira • Visio", False)]),
+    ("Heading1", [("SUMMARY OF QUALIFICATIONS", False)]),
+    ("", [("Key Skills", True)]),
+    ("", [("Requirements gathering • Root cause analysis •", False)]),
+    ("", [("Facilitate UAT", False)]),
+    ("", [("Recent Tools &amp; Technology", True)]),
+    ("", [("Jira • Visio • SQL", False)]),
+    ("", [("Methodologies:", True)]),
+    ("", [("Agile • Waterfall", False)]),
     ("Heading1", [("EXPERIENCE", False)]),
     ("Heading3", [("ACME CORP, Columbus, Ohio    2019 to 2026", False)]),
     ("bullet", [("Gathered requirements in working sessions with business users.", False)]),
@@ -1656,9 +1683,12 @@ TEST_RESUME = [
     ("bullet", [("Drew process maps in Visio.", False)]),
 ]
 
+LISTING = ("We need a business analyst with Tableau, data governance and SQL. Stakeholder management "
+           "and Power BI a plus. ") * 3
+
 
 class TailorTests(FreshDbTest):
-    """Tailor resume: what may change, the checks on the AI's changes, and the saved Word copy."""
+    """Tailor resume: what may change, the checks on the AI's answer, and the saved Word copy."""
 
     def setUp(self):
         super().setUp()
@@ -1673,90 +1703,178 @@ class TailorTests(FreshDbTest):
         self.addCleanup(shutil.rmtree, self.profile_dir, True)
         self.addCleanup(shutil.rmtree, self.out_dir, True)
 
-    def paras(self):
+    def paras(self, resume=TEST_RESUME):
         from jobsearch import tailor
-        return tailor.read_paragraphs(make_docx(TEST_RESUME))
+        return tailor.read_paragraphs(make_docx(resume))
 
     def add_job(self):
         job = board_job(1, "Business Analyst", "Columbus, OH")
-        job["job_description"] = "We need a business analyst for requirements, UAT and SQL. Tableau a plus. " * 5
+        job["job_description"] = LISTING
         db.save_results([job])
         return db.list_jobs()[0]["id"]
 
+    def answer(self):
+        return {
+            "keywords": [
+                {"keyword": "Tableau", "why": "Listed as a must", "places": [
+                    {"para": 15, "text": "Led UAT and built Tableau dashboards for 40 users."},
+                    {"para": 13, "text": "ACME CORP with Tableau"},                 # employer line: fixed
+                    {"para": 16, "text": "Wrote SQL queries to check data."},        # doesn't use the keyword
+                    {"section": "Recent Tools & Technology"},
+                    {"section": "Methodologies"}]},                                  # not a skills section
+                {"keyword": "SQL", "places": [{"section": "Key Skills"}]},           # already on her resume
+                {"keyword": "Kubernetes", "places": [{"section": "Key Skills"}]},    # not in the listing
+                {"keyword": "data governance", "places": [
+                    {"para": 3, "text": "Business analyst with 10 years of experience in requirements, UAT "
+                                        "and data governance for retail systems."}]},
+                {"keyword": "tableau", "places": []}],                               # same keyword again
+            "sections": [{"name": "Key Skills",
+                          "items": ["Facilitate UAT", "Stakeholder management", "requirements gathering"],
+                          "keep": [{"item": "Facilitate UAT", "why": "UAT is in the listing"},
+                                   {"item": "Made up", "why": "x"}],
+                          "drop": [{"item": "Root cause analysis", "why": "not asked for"},
+                                   {"item": "Facilitate UAT", "why": "already in keep"}]}]}
+
     def test_what_may_change(self):
-        kinds = {p["i"]: (p["kind"], p["job"]) for p in self.paras()}
+        from jobsearch import tailor
+        paras = self.paras()
+        kinds = {p["i"]: (p["kind"], p["job"] or p["skills"]) for p in paras}
         self.assertEqual(kinds[0][0], None)                    # her name
         self.assertEqual(kinds[1][0], None)                    # contact line
         self.assertEqual(kinds[3][0], "summary")
-        self.assertEqual(kinds[5][0], "list")
-        self.assertEqual(kinds[7][0], None)                    # employer and dates
-        self.assertEqual(kinds[8], ("bullet", "ACME CORP"))
-        self.assertEqual(kinds[12], ("bullet", "BETA INC"))
+        self.assertEqual(kinds[5][0], None)                    # the "Key Skills" label
+        self.assertEqual([kinds[6], kinds[7], kinds[9]], [("skills", 0), ("skills", 0), ("skills", 1)])
+        self.assertEqual(kinds[11][0], None)                   # Methodologies isn't one of her skills sections
+        self.assertEqual(kinds[13][0], None)                   # employer and dates
+        self.assertEqual(kinds[14], ("bullet", "ACME CORP"))
+        self.assertEqual(kinds[18], ("bullet", "BETA INC"))
+        sections = tailor.skills_sections(paras)
+        self.assertEqual([(s["label"], s["paras"], s["items"]) for s in sections], [
+            ("Key Skills", [6, 7], ["Requirements gathering", "Root cause analysis", "Facilitate UAT"]),
+            ("Recent Tools & Technology", [9], ["Jira", "Visio", "SQL"])])
+        inline = tailor.skills_sections(self.paras([("Heading1", [("SKILLS", False)]),
+                                                    ("", [("Key Skills: ", True), ("SQL • Jira • Visio", False)])]))
+        self.assertEqual((inline[0]["label"], inline[0]["inline"], inline[0]["items"]),
+                         ("Key Skills", "Key Skills: ", ["SQL", "Jira", "Visio"]))
 
-    def test_checks_on_the_ai_changes(self):
+    def test_checks_on_the_ai_answer(self):
         from jobsearch import tailor
         paras = self.paras()
         text = "\n".join(p["text"] for p in paras)
-        raw = [
-            {"type": "rewrite", "para": 3, "text": "Business analyst with 10 years leading UAT and requirements.", "why": "lead"},
-            {"type": "rewrite", "para": 9, "text": "Led UAT with Tableau dashboards for 40 users.", "why": "x"},
-            {"type": "rewrite", "para": 7, "text": "ACME CORP, Remote", "why": "fixed line"},
-            {"type": "rewrite", "para": 5, "text": "Key Skills: SQL • Tableau • Jira", "why": "new item"},
-            {"type": "rewrite", "para": 5, "text": "Key Skills: Jira • SQL • Visio", "why": "order"},
-            {"type": "reorder", "paras": [8, 9, 10], "order": [10, 8, 9], "why": "SQL first"},
-            {"type": "reorder", "paras": [10, 11, 12], "order": [12, 10, 11], "why": "across jobs"},
-            {"type": "reorder", "paras": [8, 10], "order": [10, 8], "why": "not next to each other"},
-        ]
-        kept = tailor.check_changes(raw, paras, text)
-        self.assertEqual([(c["type"], c.get("para"), c.get("paras")) for c in kept],
-                         [("rewrite", 3, None), ("rewrite", 9, None), ("rewrite", 5, None), ("reorder", None, [8, 9, 10])])
-        self.assertEqual(kept[0]["unsupported"], [])
-        self.assertEqual(kept[1]["unsupported"], ["Tableau", "40"])   # not on her resume: flagged
-        self.assertEqual(kept[3]["after"][0], "Wrote SQL queries to check data.")
+        r = tailor.check_answer(self.answer(), paras, text, LISTING)
+        self.assertEqual([k["keyword"] for k in r["keywords"]], ["Tableau", "data governance"])
+        tableau = r["keywords"][0]["places"]
+        self.assertEqual([p["target"] for p in tableau], ["p15", "s1"])
+        self.assertEqual(tableau[0]["unsupported"], ["Tableau", "40"])   # new to her resume: flagged
+        self.assertEqual((tableau[1]["add"], tableau[1]["unsupported"]), ("Tableau", ["Tableau"]))
+        self.assertEqual(r["keywords"][1]["places"][0]["unsupported"], ["data governance"])
+        skills, tools = r["sections"]
+        self.assertEqual(skills["suggested"], ["Facilitate UAT", "Stakeholder management", "Requirements gathering"])
+        self.assertEqual((skills["added"], skills["removed"], skills["unsupported"]),
+                         (["Stakeholder management"], ["Root cause analysis"], ["Stakeholder management"]))
+        self.assertEqual([a["item"] for a in skills["keep"]], ["Facilitate UAT"])
+        self.assertEqual([a["item"] for a in skills["drop"]], ["Root cause analysis"])
+        self.assertEqual((tools["suggested"], tools["added"], tools["keep"]), (["Jira", "Visio", "SQL"], [], []))
+        self.assertEqual(tailor.check_answer("nonsense", paras, text, LISTING)["keywords"], [])
 
     def test_writes_a_copy_with_formatting_kept(self):
         from jobsearch import tailor
+        import xml.etree.ElementTree as ET
         data = make_docx(TEST_RESUME)
+        many = ["Requirements gathering", "Facilitate UAT", "Stakeholder management", "Data governance",
+                "Root cause analysis", "Process modeling", "Workshop facilitation", "Backlog management"]
         out = tailor.write_resume(data, [
-            {"type": "rewrite", "para": 3, "text": "Requirements & UAT lead <for> retail."},
-            {"type": "rewrite", "para": 5, "text": "Key Skills: Jira • SQL • Visio"},
-            {"type": "reorder", "paras": [8, 9, 10], "order": [10, 8, 9]}])
-        back = {p["i"]: p["text"] for p in tailor.read_paragraphs(out)}
-        self.assertEqual(back[3], "Requirements & UAT lead <for> retail.")
-        self.assertEqual([back[8], back[9], back[10]], ["Wrote SQL queries to check data.",
-                         "Gathered requirements in working sessions with business users.", "Led UAT for the order system."])
+            {"para": 3, "text": "Requirements & UAT lead <for> retail."},
+            {"para": 15, "text": "Led UAT and built Tableau dashboards."},
+            {"section": 0, "items": many},
+            {"section": 1, "items": ["Jira", "Tableau"]}])
+        back = tailor.read_paragraphs(out)
+        texts = [p["text"] for p in back]
+        self.assertIn("Requirements & UAT lead <for> retail.", texts)
+        self.assertIn("Led UAT and built Tableau dashboards.", texts)
+        sections = tailor.skills_sections(back)
+        self.assertEqual(sections[0]["items"], many)
+        self.assertGreater(len(sections[0]["paras"]), 2)                 # lines added for the longer list
+        self.assertTrue(all(len(t) <= 60 for t in texts[6:6 + len(sections[0]["paras"])]))
+        self.assertEqual(sections[1]["items"], ["Jira", "Tableau"])
+        for fixed in ("Key Skills", "Recent Tools & Technology", "Methodologies:", "Agile • Waterfall",
+                      "ACME CORP, Columbus, Ohio    2019 to 2026"):
+            self.assertIn(fixed, texts)
+        xml = zipfile.ZipFile(io.BytesIO(out)).read("word/document.xml").decode()
+        self.assertIn("<w:numPr>", xml)
+        ET.fromstring(xml)  # still valid XML
+
+        shorter = tailor.write_resume(data, [{"section": 0, "items": ["SQL"]}, {"section": 1, "items": ["Jira"]}])
+        back = tailor.read_paragraphs(shorter)
+        self.assertEqual(len(back), len(TEST_RESUME) - 1)                 # the extra line is gone
+        self.assertEqual([s["items"] for s in tailor.skills_sections(back)], [["SQL"], ["Jira"]])
+
+        inline = make_docx([("Heading1", [("SKILLS", False)]),
+                            ("", [("Key Skills: ", True), ("SQL • Jira • Visio", False)])])
+        out = tailor.write_resume(inline, [{"section": 0, "items": ["Jira", "SQL"]}])
         xml = zipfile.ZipFile(io.BytesIO(out)).read("word/document.xml").decode()
         self.assertIn('<w:b/></w:rPr><w:t xml:space="preserve">Key Skills: </w:t>', xml)  # bold label kept
-        self.assertIn("<w:numPr>", xml)
-        import xml.etree.ElementTree as ET
-        ET.fromstring(xml)  # still valid XML
+        self.assertEqual(tailor.skills_sections(tailor.read_paragraphs(out))[0]["items"], ["Jira", "SQL"])
 
     def test_suggest_and_save(self):
         from jobsearch import tailor
         jid = self.add_job()
-        reply = json.dumps({"changes": [
-            {"type": "rewrite", "para": 3, "text": "Business analyst with 10 years leading UAT and requirements.", "why": "lead"},
-            {"type": "reorder", "paras": [8, 9, 10], "order": [10, 8, 9], "why": "SQL first"}],
-            "gaps": ["Tableau"]})
+        reply = json.dumps(self.answer())
         sent = []
         with mock.patch.object(tailor.ai, "json_answer", side_effect=lambda i, t, task: sent.append(t) or reply):
             r = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
             again = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
-        self.assertEqual(len(sent), 1)                       # saved: opening it again costs nothing
+            self.assertEqual(len(sent), 1)                   # kept: opening it again costs nothing
+            self.client.post(f"/api/jobs/{jid}/tailor", json={"again": True})
+            self.assertEqual(len(sent), 2)                   # unless she asks again
         self.assertNotIn("jane@example.com", sent[0])        # contact details aren't sent
-        self.assertEqual((len(r["changes"]), r["gaps"], again["changes"]), (2, ["Tableau"], r["changes"]))
+        self.assertIn("Key Skills: Requirements gathering | Root cause analysis | Facilitate UAT", sent[0])
+        self.assertEqual([k["keyword"] for k in r["keywords"]], ["Tableau", "data governance"])
+        self.assertEqual(again["keywords"], r["keywords"])
+        self.assertEqual(set(r["targets"]), {"p15", "s1", "p3", "s0"})
+        self.assertEqual(r["targets"]["s0"]["current"], "Requirements gathering\nRoot cause analysis\nFacilitate UAT")
+        self.assertEqual(r["source"]["from"], "profile")
 
-        self.assertEqual(self.client.post(f"/api/jobs/{jid}/tailor/save", json={"picked": []}).status_code, 400)
-        saved = self.client.post(f"/api/jobs/{jid}/tailor/save", json={"picked": [1]}).get_json()
-        self.assertEqual(saved["name"], "Resume - Acme - Business Analyst.docx")
-        self.assertTrue(os.path.exists(saved["path"]))
+        none = self.client.post(f"/api/jobs/{jid}/tailor/save", json={"drafts": {"p15": "Led UAT for the order system."}})
+        self.assertEqual(none.status_code, 400)
+        self.assertIn("Nothing is changed", none.get_json()["error"])
+        drafts = {"p15": "Led UAT and built Tableau dashboards.", "s0": "Facilitate UAT\nRequirements gathering",
+                  "p13": "ACME CORP, Remote"}                # not a place she can edit: ignored
+        saved = self.client.post(f"/api/jobs/{jid}/tailor/save", json={"drafts": drafts}).get_json()
+        self.assertEqual(saved["name"], "Acme-Business Analyst - Suggested Resume.docx")
         with open(saved["path"], "rb") as f:
-            back = {p["i"]: p["text"] for p in tailor.read_paragraphs(f.read())}
-        self.assertEqual(back[8], "Wrote SQL queries to check data.")
-        self.assertTrue(back[3].startswith("Business analyst with 10 years of experience"))  # unpicked: unchanged
+            back = tailor.read_paragraphs(f.read())
+        texts = [p["text"] for p in back]
+        self.assertIn("Led UAT and built Tableau dashboards.", texts)
+        self.assertIn("ACME CORP, Columbus, Ohio    2019 to 2026", texts)
+        self.assertEqual(tailor.skills_sections(back)[0]["items"], ["Facilitate UAT", "Requirements gathering"])
         self.assertEqual(self.client.get(f"/api/jobs/{jid}/tailor").get_json()["path"], saved["path"])
+        with mock.patch.object(tailor.ai, "json_answer", side_effect=AssertionError("no AI call")):
+            reopened = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
+        self.assertEqual(reopened["drafts"]["p15"], drafts["p15"])          # her boxes are kept
+        self.assertNotIn("p13", reopened["drafts"])
         with open(os.path.join(self.profile_dir, "Resume.docx"), "rb") as f:
             self.assertEqual(f.read(), make_docx(TEST_RESUME))  # her own resume untouched
+
+    def test_starts_from_the_resume_she_loaded(self):
+        from jobsearch import tailor
+        mine = make_docx(TEST_RESUME[:4] + [("", [("Key Skills: ", True), ("Tableau • SQL", False)])])
+        r = self.client.post("/api/profile/resume_file", data={"file": (io.BytesIO(mine), "Jen resume.docx")},
+                             content_type="multipart/form-data").get_json()
+        self.assertEqual((r["tailor_resume"]["name"], r["tailor_resume"]["from"], r["tailor_note"]),
+                         ("Jen resume.docx", "upload", None))
+        self.assertEqual(tailor.resume_data(), mine)
+        self.assertEqual(self.client.get("/api/profile").get_json()["tailor_resume"]["name"], "Jen resume.docx")
+        # a .txt resume can't be tailored: the Word file stays the one Tailor resume uses
+        r = self.client.post("/api/profile/resume_file", data={"file": (io.BytesIO(b"plain text"), "resume.txt")},
+                             content_type="multipart/form-data").get_json()
+        self.assertEqual(r["tailor_resume"]["name"], "Jen resume.docx")
+        # a Word file Tailor resume can't edit (text boxes): her text still loads, with a note
+        boxes = make_docx([("", [("Jane Doe<w:txbxContent/>", False)])])
+        r = self.client.post("/api/profile/resume_file", data={"file": (io.BytesIO(boxes), "boxes.docx")},
+                             content_type="multipart/form-data").get_json()
+        self.assertEqual((r["text"], r["tailor_resume"]["name"]), ("Jane Doe", "Jen resume.docx"))
+        self.assertIn("text boxes", r["tailor_note"])
 
     def test_needs_a_description(self):
         job = board_job(2, "BA")

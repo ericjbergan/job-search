@@ -331,7 +331,7 @@ def api_profile():
         db.set_profile(**{k: data.get(k) for k in db.PROFILE_FIELDS})
     else:
         fill_profile_from_files()
-    return jsonify({**db.get_profile(), "weight_defaults": {
+    return jsonify({**db.get_profile(), "tailor_resume": tailor.source_info(), "weight_defaults": {
         **{f"{k}_weight": v for k, v in ranking.MIX_VALUES.items()},
         **{f"weight_{n}": w for n, _, w in ranking.CRITERIA}}})
 
@@ -347,15 +347,22 @@ def api_profile_load_files():
 
 @app.route("/api/profile/resume_file", methods=["POST"])
 def api_profile_resume_file():
-    """Pull the text out of an uploaded resume (.docx or .txt) so it can be checked before saving."""
+    """Pull the text out of an uploaded resume (.docx or .txt) so it can be checked before saving.
+    A Word file is also kept: Tailor resume starts from the one she loaded last."""
     upload = request.files.get("file")
     if not upload or not upload.filename:
         return _error("Choose the resume file")
+    data = upload.read()
     try:
-        text = ranking_files.resume_text(upload.filename, upload.read())
+        text = ranking_files.resume_text(upload.filename, data)
     except ValueError as e:
         return _error(str(e))
-    return jsonify({"text": text})
+    note = None
+    try:
+        source = tailor.keep_upload(upload.filename, data)
+    except tailor.TailorError as e:
+        source, note = tailor.source_info(), f"Tailor resume can't use this file: {e}"
+    return jsonify({"text": text, "tailor_resume": source, "tailor_note": note})
 
 
 @app.route("/api/ranking")
@@ -644,8 +651,8 @@ def api_update_job(job_id):
 
 @app.route("/api/jobs/<int:job_id>/tailor", methods=["GET", "POST"])
 def api_tailor(job_id):
-    """GET: the tailored resume saved for this job (if any). POST: suggested resume changes for this job
-    (asks the AI once; saved until her resume or the listing changes)."""
+    """GET: the suggested resume saved for this job (if any). POST: missing keywords and skills suggestions
+    for this job (asks the AI once; kept until her resume file or the listing changes, or {"again": true})."""
     job = db.get_job(job_id)
     if not job:
         return _error("Job not found", 404)
@@ -653,8 +660,9 @@ def api_tailor(job_id):
         path = tailor.tailored_path(job_id)
         return jsonify({"path": path, "name": os.path.basename(path) if path else None})
     match = (db.get_matches([job_id]).get(job_id) or {}).get("details") or {}
+    again = bool((request.get_json(silent=True) or {}).get("again"))
     try:
-        result = tailor.suggest(job, db.get_profile(), match)
+        result = tailor.suggest(job, match, again=again)
     except tailor.TailorError as e:
         return _error(str(e))
     except ai.AIError as e:
@@ -664,13 +672,14 @@ def api_tailor(job_id):
 
 @app.route("/api/jobs/<int:job_id>/tailor/save", methods=["POST"])
 def api_tailor_save(job_id):
-    """Save a Word copy of her resume with the changes she picked (her original isn't changed)."""
+    """Keep her text boxes and save a Word copy of her resume with the ones she changed (her own resume
+    file isn't changed)."""
     job = db.get_job(job_id)
     if not job:
         return _error("Job not found", 404)
-    picked = (request.get_json() or {}).get("picked") or []
+    drafts = (request.get_json(silent=True) or {}).get("drafts") or {}
     try:
-        path = tailor.save(job, picked)
+        path = tailor.save(job, drafts)
     except tailor.TailorError as e:
         return _error(str(e))
     except OSError as e:
