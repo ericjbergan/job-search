@@ -679,6 +679,41 @@ class DefaultTitlesTests(FreshDbTest):
         by_name = {c["name"]: c["keywords"] for c in db.list_companies()}
         self.assertEqual(by_name, {"Pearson": "product owner", "OSU": None})
 
+    def test_careers_links_fill_blanks_once(self):
+        with db.connect() as conn:
+            conn.execute("DELETE FROM meta WHERE key = 'seeded_careers_links'")
+            conn.execute("DELETE FROM companies")
+        db.add_company({"name": "TEK Systems", "ats": "search"})
+        db.add_company({"name": "Bath and Body Works", "ats": "search"})
+        db.add_company({"name": "Kforce", "ats": "search", "careers_url": "https://example.com/kforce-mine"})
+        db.add_company({"name": "Crowe", "ats": "search"})
+        links = {"TEKsystems": "https://careers.teksystems.com/us/en",
+                 "Bath & Body Works": "https://careers.bathandbodyworks.com/jobs",
+                 "Kforce": "https://www.kforce.com/find-work/search-jobs/"}
+        with tempfile.TemporaryDirectory() as tmp:
+            seed = os.path.join(tmp, "seed.json")
+            with open(seed, "w", encoding="utf-8") as f:
+                json.dump({"careers_links": links}, f)
+            db.fill_careers_links(seed)
+            urls = {c["name"]: c["careers_url"] for c in db.list_companies()}
+            self.assertEqual(urls["TEK Systems"], links["TEKsystems"])
+            self.assertEqual(urls["Bath and Body Works"], links["Bath & Body Works"])
+            self.assertEqual(urls["Kforce"], "https://example.com/kforce-mine")  # her own URL is kept
+            self.assertFalse(urls["Crowe"])
+            # They stay JSearch companies; the URL is only where the name links to.
+            self.assertTrue(all(c["ats"] == "search" for c in db.list_companies()))
+            # Runs once: a URL she clears later doesn't come back.
+            with db.connect() as conn:
+                conn.execute("UPDATE companies SET careers_url = NULL WHERE name = 'TEK Systems'")
+            db.fill_careers_links(seed)
+            self.assertFalse({c["name"]: c["careers_url"] for c in db.list_companies()}["TEK Systems"])
+
+    def test_seed_careers_links_are_web_addresses(self):
+        with open(db.SEED_PATH, encoding="utf-8") as f:
+            links = json.load(f)["careers_links"]
+        self.assertGreaterEqual(len(links), 20)
+        self.assertTrue(all(u.startswith("https://") and " " not in u for u in links.values()))
+
 
 class DistanceAreaTests(FreshDbTest):
     def area(self, extra=None):
@@ -1683,25 +1718,27 @@ TEST_RESUME = [
     ("bullet", [("Drew process maps in Visio.", False)]),
 ]
 
-LISTING = ("We need a business analyst with Tableau, data governance and SQL. Stakeholder management "
-           "and Power BI a plus. ") * 3
+LISTING = ("About the role: we build retail systems for stores across Ohio and the Midwest.\n"
+           "Requirements:\n"
+           "• 5+ years of experience as a business analyst.\n"
+           "• Experience with Tableau and data governance.\n"
+           "• Strong SQL skills.\n"
+           "• Stakeholder management and Power BI a plus.\n"
+           "We offer a hybrid schedule, good benefits and a friendly team that likes clear requirements.")
 
 
 class TailorTests(FreshDbTest):
-    """Tailor resume: what may change, the checks on the AI's answer, and the saved Word copy."""
+    """Tailor resume: what may change, the checks on the AI's answer, saved boxes, the preview and the download."""
 
     def setUp(self):
         super().setUp()
         self.profile_dir = tempfile.mkdtemp()
-        self.out_dir = tempfile.mkdtemp()
         with open(os.path.join(self.profile_dir, "Resume.docx"), "wb") as f:
             f.write(make_docx(TEST_RESUME))
-        env = mock.patch.dict(os.environ, {"JOBSEARCH_PROFILE_DIR": self.profile_dir, "TAILORED_DIR": self.out_dir,
-                                           "ANTHROPIC_API_KEY": "test"})
+        env = mock.patch.dict(os.environ, {"JOBSEARCH_PROFILE_DIR": self.profile_dir, "ANTHROPIC_API_KEY": "test"})
         env.start()
         self.addCleanup(env.stop)
         self.addCleanup(shutil.rmtree, self.profile_dir, True)
-        self.addCleanup(shutil.rmtree, self.out_dir, True)
 
     def paras(self, resume=TEST_RESUME):
         from jobsearch import tailor
@@ -1715,25 +1752,30 @@ class TailorTests(FreshDbTest):
 
     def answer(self):
         return {
-            "keywords": [
-                {"keyword": "Tableau", "why": "Listed as a must", "places": [
-                    {"para": 15, "text": "Led UAT and built Tableau dashboards for 40 users."},
-                    {"para": 13, "text": "ACME CORP with Tableau"},                 # employer line: fixed
-                    {"para": 16, "text": "Wrote SQL queries to check data."},        # doesn't use the keyword
-                    {"section": "Recent Tools & Technology"},
-                    {"section": "Methodologies"}]},                                  # not a skills section
-                {"keyword": "SQL", "places": [{"section": "Key Skills"}]},           # already on her resume
-                {"keyword": "Kubernetes", "places": [{"section": "Key Skills"}]},    # not in the listing
-                {"keyword": "data governance", "places": [
-                    {"para": 3, "text": "Business analyst with 10 years of experience in requirements, UAT "
-                                        "and data governance for retail systems."}]},
-                {"keyword": "tableau", "places": []}],                               # same keyword again
-            "sections": [{"name": "Key Skills",
-                          "items": ["Facilitate UAT", "Stakeholder management", "requirements gathering"],
-                          "keep": [{"item": "Facilitate UAT", "why": "UAT is in the listing"},
-                                   {"item": "Made up", "why": "x"}],
-                          "drop": [{"item": "Root cause analysis", "why": "not asked for"},
-                                   {"item": "Facilitate UAT", "why": "already in keep"}]}]}
+            "keywords": ["Tableau", "SQL",                       # SQL: already on her resume
+                         "Kubernetes",                           # not in the listing
+                         {"keyword": "data governance"}, "tableau", "Power BI"],
+            "qualifications": [
+                {"text": "Experience with Tableau and data governance.", "on_resume": False},
+                {"text": "• Strong SQL skills", "on_resume": True},  # bullet and punctuation differ: still found
+                {"text": "Must hold a PMP certification.", "on_resume": False},  # not in the listing
+                "5+ years of experience as a business analyst."],
+            "summary": [
+                {"para": 3, "text": "Business analyst with 10 years of experience in requirements, UAT and data "
+                                    "governance for retail systems.", "why": "Brings data governance forward."},
+                {"para": 14, "text": "Gathered requirements."}],    # a bullet, not her summary
+            "sections": [{"name": "Key Skills", "items": ["Facilitate UAT", "Stakeholder management",
+                                                          "requirements gathering"],
+                          "why": "UAT first: the listing stresses testing."}],
+            "bullets": [
+                {"para": 15, "text": "Led UAT and built Tableau dashboards for 40 users.",
+                 "keywords": ["Tableau", "SQL"], "qualifications": ["Experience with Tableau and data governance.",
+                                                                    "Made up qualification"]},
+                {"para": 13, "text": "ACME CORP with Tableau", "keywords": ["Tableau"]},  # employer line: fixed
+                {"para": 16, "text": "Wrote SQL queries to check data.", "keywords": ["SQL"]},  # unchanged
+                {"para": 18, "text": "Managed the backlog in Jira with care.", "keywords": ["Kubernetes"]},  # adds nothing
+                {"para": 19, "text": "Drew process maps in Visio and Power BI.", "keywords": ["Power BI"]},
+                {"para": 15, "text": "Led UAT again.", "keywords": ["Tableau"]}]}         # same bullet twice
 
     def test_what_may_change(self):
         from jobsearch import tailor
@@ -1756,26 +1798,36 @@ class TailorTests(FreshDbTest):
                                                     ("", [("Key Skills: ", True), ("SQL • Jira • Visio", False)])]))
         self.assertEqual((inline[0]["label"], inline[0]["inline"], inline[0]["items"]),
                          ("Key Skills", "Key Skills: ", ["SQL", "Jira", "Visio"]))
+        places = tailor.targets(paras)
+        self.assertEqual((places["p16"]["job"], places["p16"]["number"]), ("ACME CORP", 3))
+        self.assertEqual((places["p19"]["job"], places["p19"]["number"]), ("BETA INC", 2))
+        self.assertEqual(tailor.jobs(paras), ["ACME CORP", "BETA INC"])
 
     def test_checks_on_the_ai_answer(self):
         from jobsearch import tailor
         paras = self.paras()
         text = "\n".join(p["text"] for p in paras)
         r = tailor.check_answer(self.answer(), paras, text, LISTING)
-        self.assertEqual([k["keyword"] for k in r["keywords"]], ["Tableau", "data governance"])
-        tableau = r["keywords"][0]["places"]
-        self.assertEqual([p["target"] for p in tableau], ["p15", "s1"])
-        self.assertEqual(tableau[0]["unsupported"], ["Tableau", "40"])   # new to her resume: flagged
-        self.assertEqual((tableau[1]["add"], tableau[1]["unsupported"]), ("Tableau", ["Tableau"]))
-        self.assertEqual(r["keywords"][1]["places"][0]["unsupported"], ["data governance"])
+        self.assertEqual(r["keywords"], ["Tableau", "data governance", "Power BI"])
+        self.assertEqual(r["qualifications"], [
+            {"text": "Experience with Tableau and data governance.", "on_resume": False},
+            {"text": "Strong SQL skills", "on_resume": True},
+            {"text": "5+ years of experience as a business analyst.", "on_resume": False}])
+        self.assertEqual([(s["target"], s["why"]) for s in r["summary"]], [("p3", "Brings data governance forward.")])
+        b15, b19 = r["bullets"]
+        self.assertEqual((b15["target"], b15["keywords"], b15["qualifications"]),
+                         ("p15", ["Tableau"], ["Experience with Tableau and data governance."]))
+        self.assertEqual(b15["unsupported"], ["Tableau", "40"])      # new to her resume: flagged
+        self.assertEqual((b19["target"], b19["keywords"], b19["qualifications"]), ("p19", ["Power BI"], []))
         skills, tools = r["sections"]
         self.assertEqual(skills["suggested"], ["Facilitate UAT", "Stakeholder management", "Requirements gathering"])
-        self.assertEqual((skills["added"], skills["removed"], skills["unsupported"]),
-                         (["Stakeholder management"], ["Root cause analysis"], ["Stakeholder management"]))
-        self.assertEqual([a["item"] for a in skills["keep"]], ["Facilitate UAT"])
-        self.assertEqual([a["item"] for a in skills["drop"]], ["Root cause analysis"])
-        self.assertEqual((tools["suggested"], tools["added"], tools["keep"]), (["Jira", "Visio", "SQL"], [], []))
-        self.assertEqual(tailor.check_answer("nonsense", paras, text, LISTING)["keywords"], [])
+        self.assertEqual((skills["added"], skills["removed"], skills["unsupported"], skills["why"]),
+                         (["Stakeholder management"], ["Root cause analysis"], ["Stakeholder management"],
+                          "UAT first: the listing stresses testing."))
+        self.assertEqual((tools["suggested"], tools["added"], tools["removed"], tools["why"]),
+                         (["Jira", "Visio", "SQL"], [], [], ""))
+        empty = tailor.check_answer("nonsense", paras, text, LISTING)
+        self.assertEqual((empty["keywords"], empty["bullets"], empty["summary"]), ([], [], []))
 
     def test_writes_a_copy_with_formatting_kept(self):
         from jobsearch import tailor
@@ -1816,7 +1868,7 @@ class TailorTests(FreshDbTest):
         self.assertIn('<w:b/></w:rPr><w:t xml:space="preserve">Key Skills: </w:t>', xml)  # bold label kept
         self.assertEqual(tailor.skills_sections(tailor.read_paragraphs(out))[0]["items"], ["Jira", "SQL"])
 
-    def test_suggest_and_save(self):
+    def test_suggest_save_boxes_preview_and_download(self):
         from jobsearch import tailor
         jid = self.add_job()
         reply = json.dumps(self.answer())
@@ -1825,34 +1877,58 @@ class TailorTests(FreshDbTest):
             r = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
             again = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
             self.assertEqual(len(sent), 1)                   # kept: opening it again costs nothing
-            self.client.post(f"/api/jobs/{jid}/tailor", json={"again": True})
-            self.assertEqual(len(sent), 2)                   # unless she asks again
         self.assertNotIn("jane@example.com", sent[0])        # contact details aren't sent
         self.assertIn("Key Skills: Requirements gathering | Root cause analysis | Facilitate UAT", sent[0])
-        self.assertEqual([k["keyword"] for k in r["keywords"]], ["Tableau", "data governance"])
-        self.assertEqual(again["keywords"], r["keywords"])
-        self.assertEqual(set(r["targets"]), {"p15", "s1", "p3", "s0"})
+        self.assertEqual(again["bullets"], r["bullets"])
+        self.assertEqual(set(r["targets"]), {"p3", "s0", "s1", "p15", "p19"})   # only bullets with suggestions
         self.assertEqual(r["targets"]["s0"]["current"], "Requirements gathering\nRoot cause analysis\nFacilitate UAT")
-        self.assertEqual(r["source"]["from"], "profile")
+        self.assertEqual(r["jobs"], ["ACME CORP", "BETA INC"])
+        self.assertEqual((r["saved"], r["source"]["from"]), ({}, "profile"))
+        self.assertEqual(r["file_name"], "Acme-Business Analyst - Suggested Resume.docx")
 
-        none = self.client.post(f"/api/jobs/{jid}/tailor/save", json={"drafts": {"p15": "Led UAT for the order system."}})
+        none = self.client.get(f"/api/jobs/{jid}/tailor/download")
         self.assertEqual(none.status_code, 400)
-        self.assertIn("Nothing is changed", none.get_json()["error"])
-        drafts = {"p15": "Led UAT and built Tableau dashboards.", "s0": "Facilitate UAT\nRequirements gathering",
-                  "p13": "ACME CORP, Remote"}                # not a place she can edit: ignored
-        saved = self.client.post(f"/api/jobs/{jid}/tailor/save", json={"drafts": drafts}).get_json()
-        self.assertEqual(saved["name"], "Acme-Business Analyst - Suggested Resume.docx")
-        with open(saved["path"], "rb") as f:
-            back = tailor.read_paragraphs(f.read())
+        self.assertIn("Nothing is saved", none.get_json()["error"])
+        box = lambda target, text: self.client.post(f"/api/jobs/{jid}/tailor/box", json={"target": target, "text": text})
+        self.assertEqual(box("p13", "ACME CORP, Remote").status_code, 400)      # not a place she can edit
+        self.assertEqual(box("p15", "  ").status_code, 400)                     # empty box
+        box("p15", "Led UAT and  built Tableau dashboards.")
+        saved = box("s0", "Facilitate UAT\nRequirements gathering").get_json()["saved"]
+        self.assertEqual(saved, {"p15": "Led UAT and built Tableau dashboards.",
+                                 "s0": "Facilitate UAT\nRequirements gathering"})
+
+        pv = self.client.get(f"/api/jobs/{jid}/tailor/preview").get_json()
+        self.assertEqual(pv["changes"], 2)
+        self.assertEqual(pv["paragraphs"][0], {"text": "Jane Doe", "kind": "title", "changed": False})
+        self.assertIn({"text": "Led UAT and built Tableau dashboards.", "kind": "bullet", "changed": True},
+                      pv["paragraphs"])
+        self.assertIn({"text": "ACME CORP, Columbus, Ohio    2019 to 2026", "kind": "job", "changed": False},
+                      pv["paragraphs"])
+        self.assertEqual(pv["missing"], {"keywords": ["data governance", "Power BI"],  # Tableau is in now
+                                         "qualifications": ["5+ years of experience as a business analyst."]})
+        box("p15", None)                                     # taken out again: its qualification is missing again
+        pv = self.client.get(f"/api/jobs/{jid}/tailor/preview").get_json()
+        self.assertEqual(pv["changes"], 1)
+        self.assertEqual(pv["missing"]["keywords"], ["Tableau", "data governance", "Power BI"])
+        self.assertIn("Experience with Tableau and data governance.", pv["missing"]["qualifications"])
+
+        box("p15", "Led UAT and built Tableau dashboards.")
+        got = self.client.get(f"/api/jobs/{jid}/tailor/download")
+        self.assertEqual(got.status_code, 200)
+        self.assertIn("attachment", got.headers["Content-Disposition"])
+        self.assertIn("Suggested Resume.docx", got.headers["Content-Disposition"])
+        back = tailor.read_paragraphs(got.data)
         texts = [p["text"] for p in back]
         self.assertIn("Led UAT and built Tableau dashboards.", texts)
         self.assertIn("ACME CORP, Columbus, Ohio    2019 to 2026", texts)
         self.assertEqual(tailor.skills_sections(back)[0]["items"], ["Facilitate UAT", "Requirements gathering"])
-        self.assertEqual(self.client.get(f"/api/jobs/{jid}/tailor").get_json()["path"], saved["path"])
+
         with mock.patch.object(tailor.ai, "json_answer", side_effect=AssertionError("no AI call")):
             reopened = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
-        self.assertEqual(reopened["drafts"]["p15"], drafts["p15"])          # her boxes are kept
-        self.assertNotIn("p13", reopened["drafts"])
+        self.assertEqual(reopened["saved"]["p15"], "Led UAT and built Tableau dashboards.")  # her boxes are kept
+        with mock.patch.object(tailor.ai, "json_answer", return_value=reply):
+            asked = self.client.post(f"/api/jobs/{jid}/tailor", json={"again": True}).get_json()
+        self.assertEqual(asked["saved"], reopened["saved"])                       # and kept when she asks again
         with open(os.path.join(self.profile_dir, "Resume.docx"), "rb") as f:
             self.assertEqual(f.read(), make_docx(TEST_RESUME))  # her own resume untouched
 

@@ -515,7 +515,7 @@ function renderCompanies() {
         return `
         <li class="${c.id === state.companyId ? 'active' : ''}" onclick="filterByCompany(${c.id})" title="${esc(c.notes || '')}">
             <div class="saved-name"><input type="checkbox" class="pick" ${state.selectedCompanies.has(c.id) ? 'checked' : ''}
-                onclick="event.stopPropagation(); toggleCompanySelected(${c.id}, this.checked)" aria-label="Select ${esc(c.name)}">${esc(c.name)}<span class="ats-tag ${c.ats === 'search' ? 'quota' : ''}">${esc(state.atsLabels[c.ats] || c.ats)}</span></div>
+                onclick="event.stopPropagation(); toggleCompanySelected(${c.id}, this.checked)" aria-label="Select ${esc(c.name)}">${companyNameHtml(c)}<span class="ats-tag ${c.ats === 'search' ? 'quota' : ''}">${esc(state.atsLabels[c.ats] || c.ats)}</span></div>
             ${scoreLine(c.benefits)}
             <div class="saved-meta">${esc(bits)}<br>
                 ${c.job_count} job${c.job_count === 1 ? '' : 's'} · ${c.last_checked_at ? 'checked ' + esc(relativeDate(c.last_checked_at)) : 'never checked'}</div>
@@ -527,6 +527,15 @@ function renderCompanies() {
             </div>
         </li>`;
     }).join('');
+}
+
+// The company name opens its careers page in a new window (KAN-32); the rest of the row still
+// filters the jobs list. Only web addresses become links.
+function companyNameHtml(c) {
+    const url = (c.careers_url || '').trim();
+    if (!/^https?:\/\//i.test(url)) return esc(c.name);
+    return `<a class="company-link" href="${esc(url)}" target="_blank" rel="noopener"
+        onclick="event.stopPropagation()" title="Open the careers page in a new window">${esc(c.name)}</a>`;
 }
 
 function filterByCompany(companyId) {
@@ -1875,12 +1884,19 @@ async function lookupBenefits(button) {
 
 
 // --- tailor resume ----------------------------------------------------------------------------------
-// For one job: the keywords the listing wants that her resume doesn't have (each with the places it could
-// fit), and her skills sections (current vs suggested, plus what to keep or drop). Every place has a box
-// with the text she wants; boxes showing the same place stay in step. Saving writes
-// "<Company>-<Job Title> - Suggested Resume.docx" with the boxes she changed; her own resume isn't changed.
+// For one job (Jen's KAN-31): her resume section by section. Professional Summary, the skills sections and
+// each job's bullets worth changing, each with current vs suggested text, a summary of the changes and an
+// editable box with "Save to New Resume". Saved boxes are kept per job (black on light gray); a box she
+// changes after saving goes back to gray on white until she saves it again. "Preview New Resume" shows the
+// new resume with what's still missing, and its Save downloads the Word file. Her own resume isn't changed.
 
 state.tailor = null;
+
+// Each job gets its own color, by its order on her resume (more jobs reuse the extra colors).
+const TAILOR_JOB_COLORS = [
+    ['#c2410c', '#fff1e0'], ['#0f766e', '#dcf5f1'], ['#1d4ed8', '#e3ecfc'], ['#6d28d9', '#efe7fc'],
+    ['#be123c', '#fde7ec'], ['#4d7c0f', '#eef6dc'], ['#92400e', '#f7ebdc'], ['#334155', '#e8edf3'],
+];
 
 function tailorModal() {
     let modal = document.getElementById('tailorModal');
@@ -1894,15 +1910,15 @@ function tailorModal() {
     return modal;
 }
 
-function tailorDirty() {
+// Boxes she typed in and hasn't saved.
+function tailorUnsaved() {
     const t = state.tailor;
-    if (!t || !t.result) return false;
-    const saved = t.result.drafts || {};
-    return Object.keys(t.drafts).some(id => t.drafts[id] !== (id in saved ? saved[id] : t.result.targets[id].current));
+    if (!t || !t.result) return [];
+    return [...t.touched].filter(id => t.boxes[id] !== t.result.saved[id]);
 }
 
 function closeTailor() {
-    if (tailorDirty() && !confirm('Close without saving the boxes she edited?')) return;
+    if (tailorUnsaved().length && !confirm('Close without saving the boxes she changed? (Boxes she saved are kept.)')) return;
     tailorModal().classList.add('hidden');
     state.tailor = null;
 }
@@ -1913,16 +1929,47 @@ function tailorShell(jobId, body) {
     const company = card ? card.querySelector('.job-sub').textContent : '';
     const modal = tailorModal();
     modal.innerHTML = `<div class="rank-modal-box tailor-box">
-        <div class="rank-modal-head"><h3>Tailor resume</h3>
-            <button class="fill-x" title="Close" onclick="closeTailor()">✕</button></div>
-        <div class="hint">${esc(title)}${company ? ' at ' + esc(company) : ''}</div>
+        <div class="tl-head">
+            <div class="tl-head-title"><h3>Tailor Resume</h3>
+                <div class="hint">${esc(title)}${company ? ' at ' + esc(company) : ''}</div></div>
+            <div class="tl-head-actions" id="tailorActions"></div>
+            <button class="fill-x" title="Close" onclick="closeTailor()">✕</button>
+            <div id="tailorFlash" class="tl-flash hidden"></div>
+        </div>
         <div id="tailorBody">${body}</div></div>`;
     modal.classList.remove('hidden');
 }
 
+// A message in the window's header (the page's message bar is behind the window).
+function tailorFlash(text, isError = false) {
+    const el = document.getElementById('tailorFlash');
+    if (!el) return showMessage(text, isError);
+    el.textContent = text;
+    el.classList.toggle('error', isError);
+    el.classList.remove('hidden');
+    clearTimeout(tailorFlash.timer);
+    tailorFlash.timer = setTimeout(() => el.classList.add('hidden'), isError ? 10000 : 6000);
+}
+
+function tailorHeadActions() {
+    const t = state.tailor, r = t && t.result;
+    const el = document.getElementById('tailorActions');
+    if (!el || !r) return;
+    const listing = /^https?:\/\//i.test(r.listing || '')
+        ? `<a href="${esc(r.listing)}" target="_blank" rel="noopener">go to listing</a>` : '';
+    el.innerHTML = t.preview
+        ? `${listing}`
+        : `<a href="#" onclick="askTailorAgain(); return false;" title="Get new suggestions (boxes she saved are kept)">ask again</a>
+           ${listing}
+           <button type="button" class="tl-btn" onclick="previewTailored(this)">Preview New Resume</button>`;
+}
+
 async function openTailor(jobId, again = false) {
-    const keep = again && state.tailor ? state.tailor.drafts : {};
-    state.tailor = { jobId, drafts: { ...keep } };
+    const old = state.tailor;
+    state.tailor = { jobId, boxes: {}, touched: new Set(), preview: null };
+    if (again && old && old.jobId === jobId) {  // keep what she typed
+        old.touched.forEach(id => { state.tailor.boxes[id] = old.boxes[id]; state.tailor.touched.add(id); });
+    }
     tailorShell(jobId, `<p class="hint">Reading the listing and her resume… (about a minute${again ? '' : ' the first time'})</p>`);
     try {
         const r = await api(`/api/jobs/${jobId}/tailor`, { method: 'POST', body: { again } });
@@ -1930,9 +1977,14 @@ async function openTailor(jobId, again = false) {
         state.tailor.result = r;
         renderTailor();
     } catch (e) {
+        if (!state.tailor || state.tailor.jobId !== jobId) return;
         document.getElementById('tailorBody').innerHTML = `<p class="fill-note">${esc(e.message)}</p>
             <div class="buttons"><button type="button" class="secondary" onclick="closeTailor()">Close</button></div>`;
     }
+}
+
+function askTailorAgain() {
+    openTailor(state.tailor.jobId, true);
 }
 
 // The suggested text with the words that differ from her current text in bold (word-level comparison).
@@ -1959,84 +2011,74 @@ function tailorDiffHtml(before, after) {
     return out + (bold ? '</b>' : '');
 }
 
-function tailorBoxValue(id) {
+// What's in a box: what she typed, else what she saved, else the suggestion.
+function tailorBoxValue(id, suggestion) {
     const t = state.tailor;
-    if (id in t.drafts) return t.drafts[id];
-    const saved = t.result.drafts || {};
-    return id in saved ? saved[id] : t.result.targets[id].current;
+    if (id in t.boxes) return t.boxes[id];
+    return id in t.result.saved ? t.result.saved[id] : suggestion;
 }
 
-function tailorBoxHtml(id) {
-    const target = state.tailor.result.targets[id];
-    const value = tailorBoxValue(id);
-    const rows = target.kind === 'section' ? Math.min(18, Math.max(4, value.split('\n').length + 1)) : 4;
-    const hint = target.kind === 'section' ? 'one item per line' : '';
-    return `<textarea class="tailor-text${value !== target.current ? ' changed' : ''}" data-t="${esc(id)}" rows="${rows}"
-        placeholder="${hint}" oninput="tailorTyped(this)">${esc(value)}</textarea>
-        <div class="tailor-box-note" data-note="${esc(id)}">${tailorNote(id, value)}</div>`;
+function tailorBoxState(id) {
+    const t = state.tailor;
+    const saved = t.result.saved[id];
+    if (saved === undefined) return { cls: '', note: 'Not in the new resume yet' };
+    if (t.boxes[id] !== undefined && t.boxes[id] !== saved) return { cls: '', note: 'Changed since she saved it: save again to use this text' };
+    return { cls: 'saved', note: 'Saved to the new resume · <a href="#" onclick="tailorUnsave(\'' + id + '\'); return false;">take it out</a>' };
 }
 
-function tailorNote(id, value) {
+function tailorBoxHtml(id, suggestion) {
+    const value = tailorBoxValue(id, suggestion);
     const target = state.tailor.result.targets[id];
-    const where = target.kind === 'section' ? 'one item per line · ' : '';
-    return value.trim() === target.current.trim()
-        ? `${where}Same as her resume now (left as is)`
-        : `${where}<span class="tailor-changed">Changed: this goes into the suggested resume</span>
-           · <a href="#" onclick="tailorSet('${esc(id)}', null); return false;">Back to her resume</a>`;
+    const rows = target.kind === 'section' ? Math.min(18, Math.max(4, value.split('\n').length + 1))
+        : Math.min(10, Math.max(3, Math.ceil(value.length / 95) + 1));
+    const st = tailorBoxState(id);
+    return `<textarea class="tl-box ${st.cls}" data-t="${esc(id)}" rows="${rows}"
+            ${target.kind === 'section' ? 'placeholder="one item per line"' : ''} oninput="tailorTyped(this)">${esc(value)}</textarea>
+        <div class="tl-actions"><span class="tl-state" data-state="${esc(id)}">${st.note}</span>
+            <button type="button" class="tl-btn" onclick="tailorSaveBox('${esc(id)}', this)">Save to New Resume</button></div>`;
 }
 
-// Put text in every box for this place (null = her resume's current text).
-function tailorSet(id, text) {
-    const target = state.tailor.result.targets[id];
-    const value = text === null ? target.current : text;
-    state.tailor.drafts[id] = value;
-    document.querySelectorAll(`#tailorBody textarea[data-t="${id}"]`).forEach(box => {
-        box.value = value;
-        box.classList.toggle('changed', value !== target.current);
-    });
-    tailorNotes(id, value);
+function tailorRefreshBox(id) {
+    const st = tailorBoxState(id);
+    document.querySelectorAll(`#tailorBody textarea[data-t="${id}"]`).forEach(box => box.classList.toggle('saved', st.cls === 'saved'));
+    document.querySelectorAll(`#tailorBody [data-state="${id}"]`).forEach(n => { n.innerHTML = st.note; });
 }
 
 function tailorTyped(box) {
     const id = box.dataset.t;
-    const target = state.tailor.result.targets[id];
-    state.tailor.drafts[id] = box.value;
-    box.classList.toggle('changed', box.value !== target.current);
-    document.querySelectorAll(`#tailorBody textarea[data-t="${id}"]`).forEach(other => {
-        if (other !== box) { other.value = box.value; other.classList.toggle('changed', box.value !== target.current); }
-    });
-    tailorNotes(id, box.value);
+    state.tailor.boxes[id] = box.value;
+    state.tailor.touched.add(id);
+    tailorRefreshBox(id);
 }
 
-// Refresh the notes that depend on a box's text.
-function tailorNotes(id, value) {
-    document.querySelectorAll(`#tailorBody [data-note="${id}"]`).forEach(n => { n.innerHTML = tailorNote(id, value); });
-    document.querySelectorAll(`#tailorBody [data-add="${id}"]`).forEach(n => {
-        n.innerHTML = tailorAddNote({ target: id, add: n.dataset.word });
-    });
-}
-
-function tailorAddNote(place) {
-    const where = state.tailor.result.targets[place.target].where;
-    const has = tailorBoxValue(place.target).split('\n').some(x => x.trim().toLowerCase() === place.add.toLowerCase());
-    return has ? `<span class="tailor-changed">In the ${esc(where)} box under Skills sections.</span>`
-        : `Not in the ${esc(where)} box (under Skills sections) yet.`;
-}
-
-function tailorUse(k, p) {
-    const place = state.tailor.result.keywords[k].places[p];
-    if (place.add) {  // add the keyword to a skills section box (if it isn't there yet)
-        const lines = tailorBoxValue(place.target).split('\n').map(x => x.trim()).filter(Boolean);
-        if (!lines.some(x => x.toLowerCase() === place.add.toLowerCase())) lines.push(place.add);
-        tailorSet(place.target, lines.join('\n'));
-    } else {
-        tailorSet(place.target, place.text);
+async function tailorSaveBox(id, button) {
+    const t = state.tailor;
+    const box = document.querySelector(`#tailorBody textarea[data-t="${id}"]`);
+    const text = box ? box.value : t.boxes[id];
+    button.disabled = true;
+    try {
+        const r = await api(`/api/jobs/${t.jobId}/tailor/box`, { method: 'POST', body: { target: id, text } });
+        t.result.saved = r.saved;
+        t.boxes[id] = text;
+        t.touched.delete(id);
+        tailorRefreshBox(id);
+    } catch (e) {
+        tailorFlash(e.message, true);
+    } finally {
+        button.disabled = false;
     }
 }
 
-function tailorUseSection(n) {
-    const s = state.tailor.result.sections[n];
-    tailorSet(s.target, s.suggested.join('\n'));
+async function tailorUnsave(id) {
+    const t = state.tailor;
+    try {
+        const r = await api(`/api/jobs/${t.jobId}/tailor/box`, { method: 'POST', body: { target: id, text: null } });
+        t.result.saved = r.saved;
+        t.touched.add(id);
+        tailorRefreshBox(id);
+    } catch (e) {
+        tailorFlash(e.message, true);
+    }
 }
 
 function tailorWarn(words) {
@@ -2044,115 +2086,149 @@ function tailorWarn(words) {
         ? `<div class="tailor-warn">New to her resume: ${words.map(esc).join(', ')}. Keep it only if it's true for her.</div>` : '';
 }
 
-function tailorPlaceHtml(k, p, usedBy) {
-    const r = state.tailor.result;
-    const kw = r.keywords[k], place = kw.places[p], target = r.targets[place.target];
-    const label = target.kind === 'bullet' ? `${target.where} · bullet` : target.where;
-    const others = (usedBy[place.target] || []).filter(x => x !== kw.keyword);
-    const also = others.length
-        ? `<div class="hint">Also suggested here for: ${others.map(esc).join(', ')}. The box is shared, so she can work both in.</div>` : '';
-    if (place.add) {  // a skills section: its one box is under Skills sections below
-        return `<div class="tailor-place">
-            <div class="tailor-where"><b>${esc(label)}</b></div>
-            ${tailorWarn(place.unsupported)}
-            <div class="tailor-label">Add <b>${esc(place.add)}</b> as an item
-                <button type="button" class="small secondary" onclick="tailorUse(${k}, ${p})">Add to the list</button></div>
-            <div class="tailor-box-note" data-add="${esc(place.target)}" data-word="${esc(place.add)}">${tailorAddNote(place)}</div>
-        </div>`;
-    }
-    return `<div class="tailor-place">
-        <div class="tailor-where"><b>${esc(label)}</b></div>
-        ${tailorWarn(place.unsupported)}
-        <div class="tailor-label">Now</div><div class="tailor-before">${esc(target.current)}</div>
-        <div class="tailor-label">Suggested <button type="button" class="small secondary" onclick="tailorUse(${k}, ${p})">Use suggestion</button></div>
-        <div class="tailor-after">${tailorDiffHtml(target.current, place.text)}</div>
-        ${also}
-        <div class="tailor-label">What goes in her resume</div>
-        ${tailorBoxHtml(place.target)}
-    </div>`;
+function tailorPart(label, colors, inner) {
+    return `<section class="tl-part" style="--tl-c: ${colors[0]}; --tl-bg: ${colors[1]}">
+        <h4 class="tl-label">${esc(label)}</h4>${inner}</section>`;
 }
 
-function tailorSectionHtml(s, n) {
-    const removed = new Set(s.removed.map(x => x.toLowerCase()));
+function tailorSummaryHtml() {
+    const r = state.tailor.result;
+    const ids = Object.keys(r.targets).filter(id => r.targets[id].kind === 'summary');
+    if (!ids.length) return '';
+    return tailorPart('Professional Summary', ['#222', '#e5e7eb'], ids.map(id => {
+        const target = r.targets[id];
+        const s = r.summary.find(x => x.target === id);
+        const suggested = s ? s.text : target.current;
+        return `<div class="tl-card">
+            ${tailorWarn(s && s.unsupported)}
+            <div class="tl-field"><b>Current:</b> ${esc(target.current)}</div>
+            <div class="tl-field"><b>Suggested:</b> ${s ? tailorDiffHtml(target.current, s.text) : esc(target.current)}</div>
+            <div class="tl-why"><b>Summary of changes:</b> ${s ? esc(s.why || 'Reworded for this listing.') : 'No change suggested for this job.'}</div>
+            ${tailorBoxHtml(id, suggested)}
+        </div>`;
+    }).join(''));
+}
+
+function tailorSectionHtml(s) {
+    // "Key Skills Added", "Artifacts Added", "Tools Added"
+    const word = /artifact/i.test(s.name) ? 'Artifacts' : /tool|technolog/i.test(s.name) ? 'Tools' : s.name;
     const added = new Set(s.added.map(x => x.toLowerCase()));
-    const current = s.current.map(x => removed.has(x.toLowerCase()) ? `<s>${esc(x)}</s>` : esc(x)).join(' • ');
     const suggested = s.suggested.map(x => added.has(x.toLowerCase()) ? `<b>${esc(x)}</b>` : esc(x)).join(' • ');
-    const advice = (list, title) => list.length
-        ? `<div class="tailor-advice"><b>${title}</b><ul>${list.map(a =>
-            `<li>${esc(a.item)}${a.why ? ` <span class="hint">· ${esc(a.why)}</span>` : ''}</li>`).join('')}</ul></div>` : '';
-    return `<div class="tailor-place">
-        <div class="tailor-where"><b>${esc(s.name)}</b></div>
+    const list = items => items.length ? items.map(esc).join(' • ') : '<span class="hint">none</span>';
+    return tailorPart(s.name, ['#1e7b34', '#e3f6e5'], `<div class="tl-card">
         ${tailorWarn(s.unsupported)}
-        <div class="tailor-label">Now <span class="hint">(struck out: suggested to take off)</span></div>
-        <div class="tailor-before">${current}</div>
-        <div class="tailor-label">Suggested <span class="hint">(bold: new)</span>
-            <button type="button" class="small secondary" onclick="tailorUseSection(${n})">Use suggestion</button></div>
-        <div class="tailor-after">${suggested}</div>
-        <div class="tailor-advice-row">${advice(s.keep, 'Important to keep for this job')}${advice(s.drop, 'Could take off')}</div>
-        <div class="tailor-label">What goes in her resume</div>
-        ${tailorBoxHtml(s.target)}
-    </div>`;
+        <div class="tl-field"><b>Current:</b> ${esc(s.current.join(' • '))}</div>
+        <div class="tl-field"><b>Suggested:</b> ${suggested}</div>
+        <div class="tl-why"><b>Summary of Changes</b>
+            <div class="tl-sub"><b>${esc(word)} Added:</b> ${list(s.added)}</div>
+            <div class="tl-sub"><b>${esc(word)} Removed:</b> ${list(s.removed)}</div>
+            <div class="tl-sub"><b>Summary of additional changes:</b> ${esc(s.why || 'None.')}</div>
+        </div>
+        ${tailorBoxHtml(s.target, s.suggested.join('\n'))}
+    </div>`);
+}
+
+function tailorJobsHtml() {
+    const r = state.tailor.result;
+    return r.jobs.map((job, n) => {
+        const bullets = r.bullets.filter(b => r.targets[b.target].job === job);
+        if (!bullets.length) return '';
+        return tailorPart(job, TAILOR_JOB_COLORS[n % TAILOR_JOB_COLORS.length], bullets.map(b => {
+            const target = r.targets[b.target];
+            return `<div class="tl-card tl-bullet">
+                <div class="tl-num">${target.number}.</div>
+                <div class="tl-bullet-body">
+                    ${tailorWarn(b.unsupported)}
+                    <div class="tl-field"><b>Current:</b> ${esc(target.current)}</div>
+                    <div class="tl-field"><b>Suggested:</b> ${tailorDiffHtml(target.current, b.text)}</div>
+                    <div class="tl-why"><b>Summary of Changes</b>
+                        <div class="tl-sub"><b>ATS Keywords:</b> ${b.keywords.length ? b.keywords.map(esc).join(', ') : '<span class="hint">none</span>'}</div>
+                        <div class="tl-sub"><b>Qualifications:</b> ${b.qualifications.length
+                            ? `<ul>${b.qualifications.map(q => `<li>${esc(q)}</li>`).join('')}</ul>` : '<span class="hint">none</span>'}</div>
+                    </div>
+                    ${tailorBoxHtml(b.target, b.text)}
+                </div>
+            </div>`;
+        }).join(''));
+    }).join('');
 }
 
 function renderTailor() {
     const t = state.tailor, r = t.result;
+    t.preview = null;
+    tailorHeadActions();
     const src = r.source
         ? `Starting from <b>${esc(r.source.name)}</b>${r.source.from === 'upload'
             ? ` (loaded ${esc(r.source.at)} with "Load resume file…")` : ' (in the profile folder)'}.` : '';
-    const saved = r.saved_path
-        ? `<div class="tailor-saved">Saved for this job: ${esc(r.saved_path.split(/[\\/]/).pop())}
-             <button class="small secondary" onclick="openTailored(${t.jobId})">Open in Word</button></div>` : '';
-    const usedBy = {};
-    r.keywords.forEach(kw => kw.places.forEach(p => (usedBy[p.target] = usedBy[p.target] || []).push(kw.keyword)));
-    const keywords = r.keywords.length
-        ? r.keywords.map((kw, k) => `<div class="tailor-kw">
-            <div class="tailor-kw-head"><span class="tailor-kw-name">${esc(kw.keyword)}</span>${kw.why ? ` <span class="hint">· ${esc(kw.why)}</span>` : ''}</div>
-            ${kw.places.length ? kw.places.map((_, p) => tailorPlaceHtml(k, p, usedBy)).join('')
-                : '<p class="hint">No natural spot found on her resume. If it\'s true for her, she can add it in Word.</p>'}
-          </div>`).join('')
-        : '<p>None found: her resume already has the keywords this listing looks for.</p>';
-    const sections = r.sections.length
-        ? r.sections.map((s, n) => tailorSectionHtml(s, n)).join('')
-        : '<p class="hint">Her resume has no Key Skills, Common Artifacts Produced or Recent Tools &amp; Technology section.</p>';
-    document.getElementById('tailorBody').innerHTML = `${saved}
-        <p class="hint">${src} Each box is what goes in the suggested resume. It starts as her resume reads now:
-           click <b>Use suggestion</b> to copy the suggested wording in, then edit it however she likes.
-           Boxes she doesn't change stay as they are. Her own resume file isn't changed.</p>
-        <h4 class="tailor-part">Keywords the listing looks for that her resume doesn't have</h4>
-        ${keywords}
-        <h4 class="tailor-part">Skills sections</h4>
-        ${sections}
-        <div class="buttons">
-            <button type="button" class="add-btn" onclick="saveTailored(this)">Save suggested resume</button>
-            <button type="button" class="secondary" onclick="askTailorAgain()" title="Get new suggestions (her edited boxes are kept)">Ask again</button>
-            <button type="button" class="secondary" onclick="closeTailor()">Close</button>
-        </div>
-        <div id="tailorResult"></div>`;
+    const jobs = tailorJobsHtml();
+    document.getElementById('tailorBody').innerHTML = `
+        <p class="hint">${src} Each box starts with the suggestion: edit it however she likes, then click
+           <b>Save to New Resume</b>. Only saved boxes go into the new resume; her own resume file isn't changed.</p>
+        ${tailorSummaryHtml()}
+        ${r.sections.map(tailorSectionHtml).join('')}
+        ${jobs || '<p class="hint">No bullet changes suggested: her bullets already cover what this listing asks for.</p>'}`;
 }
 
-function askTailorAgain() {
-    openTailor(state.tailor.jobId, true);
-}
-
-async function saveTailored(button) {
+async function previewTailored(button) {
     const t = state.tailor;
-    const drafts = { ...(t.result.drafts || {}), ...t.drafts };
     button.disabled = true;
     try {
-        const r = await api(`/api/jobs/${t.jobId}/tailor/save`, { method: 'POST', body: { drafts } });
-        t.result.saved_path = r.path;
-        t.result.drafts = drafts;
-        t.drafts = {};
-        renderTailor();
-        document.getElementById('tailorResult').innerHTML = `<p class="tailor-done">Saved <b>${esc(r.name)}</b> in
-            ${esc(r.folder)}, ready to upload when she applies.</p>`;
+        t.preview = await api(`/api/jobs/${t.jobId}/tailor/preview`);
+        renderTailorPreview();
     } catch (e) {
-        showMessage(e.message, true);
+        tailorFlash(e.message, true);
         button.disabled = false;
     }
 }
 
-async function openTailored(jobId) {
-    try { await api(`/api/jobs/${jobId}/tailor/open`, { method: 'POST' }); }
-    catch (e) { showMessage(e.message, true); }
+function renderTailorPreview() {
+    const t = state.tailor, p = t.preview;
+    tailorHeadActions();
+    const unsaved = tailorUnsaved().length;
+    const lines = p.paragraphs.map(x => `<div class="tl-pv-${x.kind}${x.changed ? ' tl-pv-changed' : ''}">${esc(x.text)}</div>`).join('');
+    const kw = p.missing.keywords, qs = p.missing.qualifications;
+    document.getElementById('tailorBody').innerHTML = `
+        <p class="hint">${p.changes ? `The new resume with her ${p.changes} saved change${p.changes === 1 ? '' : 's'} (highlighted).`
+            : 'Nothing is saved to the new resume yet, so this is her resume as it is.'}
+            ${unsaved ? `<b>${unsaved} box${unsaved === 1 ? ' has' : 'es have'} changes that aren't saved</b> and aren't included.` : ''}</p>
+        <div class="tl-preview">${lines}</div>
+        <section class="tl-part tl-missing" style="--tl-c: #222; --tl-bg: #fff">
+            <h4 class="tl-label">Still Missing</h4>
+            <div class="tl-card">
+                <div class="tl-field"><b>ATS Keywords:</b> ${kw.length ? kw.map(esc).join(', ') : 'none: all of them are in the new resume'}</div>
+                <div class="tl-field"><b>Qualifications:</b> ${qs.length
+                    ? `<ul>${qs.map(q => `<li>${esc(q)}</li>`).join('')}</ul>` : 'none: the new resume covers all of them'}</div>
+            </div>
+        </section>
+        <div class="buttons">
+            <button type="button" class="add-btn" onclick="downloadTailored(this)">Save</button>
+            <button type="button" class="secondary" onclick="renderTailor()">Continue editing</button>
+        </div>`;
+    document.querySelector('#tailorModal .rank-modal-box').scrollTop = 0;
+}
+
+// Save downloads the Word file (the browser puts it in Downloads).
+async function downloadTailored(button) {
+    const t = state.tailor;
+    button.disabled = true;
+    try {
+        const response = await fetch(`/api/jobs/${t.jobId}/tailor/download`);
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error || `Request failed (${response.status})`);
+        }
+        const blob = await response.blob();
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = t.result.file_name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+        tailorFlash(`Downloaded ${t.result.file_name} to her Downloads folder.`);
+    } catch (e) {
+        tailorFlash(e.message, true);
+    } finally {
+        button.disabled = false;
+    }
 }

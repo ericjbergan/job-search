@@ -1,10 +1,11 @@
 """Job Search web UI: run JSearch queries on demand and track the results."""
 
+import io
 import os
 from datetime import date
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 
 # Load .env before anything reads credentials.
 load_dotenv()
@@ -649,16 +650,13 @@ def api_update_job(job_id):
 
 # --- tailor resume ----------------------------------------------------------
 
-@app.route("/api/jobs/<int:job_id>/tailor", methods=["GET", "POST"])
+@app.route("/api/jobs/<int:job_id>/tailor", methods=["POST"])
 def api_tailor(job_id):
-    """GET: the suggested resume saved for this job (if any). POST: missing keywords and skills suggestions
-    for this job (asks the AI once; kept until her resume file or the listing changes, or {"again": true})."""
+    """Suggestions for this job's Tailor resume window, plus the boxes she saved (asks the AI once; kept until
+    her resume file or the listing changes, or {"again": true})."""
     job = db.get_job(job_id)
     if not job:
         return _error("Job not found", 404)
-    if request.method == "GET":
-        path = tailor.tailored_path(job_id)
-        return jsonify({"path": path, "name": os.path.basename(path) if path else None})
     match = (db.get_matches([job_id]).get(job_id) or {}).get("details") or {}
     again = bool((request.get_json(silent=True) or {}).get("again"))
     try:
@@ -670,33 +668,44 @@ def api_tailor(job_id):
     return jsonify(result)
 
 
-@app.route("/api/jobs/<int:job_id>/tailor/save", methods=["POST"])
-def api_tailor_save(job_id):
-    """Keep her text boxes and save a Word copy of her resume with the ones she changed (her own resume
-    file isn't changed)."""
+@app.route("/api/jobs/<int:job_id>/tailor/box", methods=["POST"])
+def api_tailor_box(job_id):
+    """"Save to New Resume" for one box: {"target": "p26", "text": "..."} (text null takes it out again)."""
     job = db.get_job(job_id)
     if not job:
         return _error("Job not found", 404)
-    drafts = (request.get_json(silent=True) or {}).get("drafts") or {}
+    body = request.get_json(silent=True) or {}
     try:
-        path = tailor.save(job, drafts)
+        saved = tailor.save_box(job, str(body.get("target") or ""), body.get("text"))
     except tailor.TailorError as e:
         return _error(str(e))
-    except OSError as e:
-        return _error(f"Couldn't save the tailored resume: {e}", 500)
-    return jsonify({"path": path, "name": os.path.basename(path), "folder": os.path.dirname(path)})
+    return jsonify({"saved": saved})
 
 
-@app.route("/api/jobs/<int:job_id>/tailor/open", methods=["POST"])
-def api_tailor_open(job_id):
-    """Open the saved tailored resume in Word (this computer only)."""
-    path = tailor.tailored_path(job_id)
-    if not path:
-        return _error("No tailored resume saved for this job yet")
-    if request.remote_addr not in ("127.0.0.1", "::1"):
-        return _error("Open it on the computer running the app", 403)
-    os.startfile(path)  # Windows: opens with Word
-    return jsonify({"ok": True})
+@app.route("/api/jobs/<int:job_id>/tailor/preview")
+def api_tailor_preview(job_id):
+    """The new resume as text with her saved boxes, and what's still missing from it."""
+    job = db.get_job(job_id)
+    if not job:
+        return _error("Job not found", 404)
+    try:
+        return jsonify(tailor.preview(job))
+    except tailor.TailorError as e:
+        return _error(str(e))
+
+
+@app.route("/api/jobs/<int:job_id>/tailor/download")
+def api_tailor_download(job_id):
+    """The suggested resume as a Word file (the browser saves it to Downloads). Her own resume isn't changed."""
+    job = db.get_job(job_id)
+    if not job:
+        return _error("Job not found", 404)
+    try:
+        data, name = tailor.download(job)
+    except tailor.TailorError as e:
+        return _error(str(e))
+    return send_file(io.BytesIO(data), as_attachment=True, download_name=name,
+                     mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
 # --- backup -----------------------------------------------------------------

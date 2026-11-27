@@ -242,6 +242,7 @@ def init_db(seed_path=SEED_PATH):
     seed_db(seed_path)
     seed_benefits(seed_path)
     upgrade_seed_connectors(seed_path)
+    fill_careers_links(seed_path)
     split_default_keywords(seed_path)
 
 
@@ -300,6 +301,33 @@ def seed_benefits(seed_path=SEED_PATH):
         for row in json.load(f).get("benefits", []):
             if not get_benefits(row["company"]):
                 save_benefits(row["company"], {k: row.get(k) for k in BENEFIT_FIELDS if k in row})
+
+
+def _name_key(name):
+    """Company name for matching Jen's link list ("TEK Systems" = "TEKsystems", "&" = "and")."""
+    return benefits_mod.company_key(name or "").replace(" and ", " ").replace(" ", "")
+
+
+def fill_careers_links(seed_path=SEED_PATH):
+    """Give companies with no careers URL the link from the seed's careers_links list (KAN-32), once.
+
+    Runs one time per database (tracked in meta), and only fills blanks, so a URL she set or
+    cleared afterwards is left alone. The URL only changes where the company name links to;
+    a JSearch company stays on JSearch.
+    """
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM meta WHERE key = 'seeded_careers_links'").fetchone():
+            return
+        conn.execute("INSERT INTO meta (key, value) VALUES ('seeded_careers_links', ?)", (now_iso(),))
+    if not seed_path or not os.path.exists(seed_path):
+        return
+    with open(seed_path, encoding="utf-8") as f:
+        links = {_name_key(name): url for name, url in json.load(f).get("careers_links", {}).items()}
+    with connect() as conn:
+        for row in conn.execute("SELECT id, name FROM companies WHERE COALESCE(careers_url, '') = ''").fetchall():
+            url = links.get(_name_key(row["name"]))
+            if url:
+                conn.execute("UPDATE companies SET careers_url = ? WHERE id = ?", (url, row["id"]))
 
 
 def upgrade_seed_connectors(seed_path=SEED_PATH):

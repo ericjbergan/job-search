@@ -41,24 +41,31 @@ The resume and interests stay in her local database.
 
 Open a job and click **Tailor resume**. It starts from the Word resume she last loaded with
 **Load resume file…** (kept in the database), or `profile/Resume.docx` if she hasn't loaded one. Claude Sonnet
-reads it against the listing and shows two parts:
+reads it against the listing, and the window goes through her resume section by section:
 
-- **Keywords** an applicant tracking system would look for that her resume doesn't have. Each has one to three
-  places it could fit (her summary, a bullet under a job, or a skills section), showing the text now and the
-  suggested text with the new words in bold.
-- **Skills sections** (Key Skills, Common Artifacts Produced, Recent Tools & Technology): her items now, the
-  suggested items (new ones in bold, ones to take off struck out, most relevant first), and which items are
-  important to keep for this job and which she could take off.
+- **Professional Summary** (gray): current, suggested (new words in bold) and a summary of the changes.
+- **Skills sections** (green: Key Skills, Common Artifacts Produced, Recent Tools & Technology): current,
+  suggested, what was added and removed, and a summary of the other changes (such as why the order changed).
+- **Experience**: one colored part per job (by its order on her resume: orange, teal, blue, purple, then more
+  colors). It shows only the bullets worth changing, numbered as on her resume. Each has the ATS keywords it adds
+  and the listing's qualifications it addresses.
 
-Every place has a box holding what goes in her resume. It starts as her resume reads now; **Use suggestion**
-copies the suggested wording in, and she edits it however she likes. **Save suggested resume** writes a Word copy,
-same layout, with every box she changed, in OneDrive's `Job Search tailored resumes` folder (or `TAILORED_DIR`),
-named `<Company>-<Job Title> - Suggested Resume.docx`. Her own resume file is never changed.
+Each has a box that starts with the suggestion. She edits it, then clicks **Save to New Resume**. A saved box turns
+black on light gray; if she edits it again, it goes back to gray on white until she saves again. Saved boxes are
+kept per job, so she can close the window and pick up later.
 
-Keywords must appear in the listing and be missing from her resume. Words new to her resume are flagged in red:
-she keeps only what's true. Names, contact details, headings, employers, titles and dates can't be changed.
-Suggestions and her boxes are kept per job, so reopening costs nothing until the resume or listing changes;
-**Ask again** gets new suggestions and keeps her boxes.
+The header stays at the top while she scrolls. It has **go to listing** (opens the listing in a new window),
+**ask again** (new suggestions; her saved boxes stay) and **Preview New Resume**. The preview shows the whole
+new resume as text with her saved boxes highlighted, then **Still Missing**: the ATS keywords that aren't in the
+new resume, and the listing's qualifications that her resume doesn't show and no saved bullet covers yet.
+**Save** downloads `<Company>-<Job Title> - Suggested Resume.docx` (same layout as hers) to her Downloads
+folder; **Continue editing** goes back with everything kept. Her own resume file is never changed.
+
+The AI's answer is checked before it's shown. Keywords must appear in the listing and be missing from her
+resume. Qualifications must be copied from the listing. A bullet only claims the keywords its new text really
+adds. Words new to her resume are flagged in red, so she keeps only what's true. Names, contact details,
+headings, employers, titles and dates can't be changed. Suggestions are kept per job, so reopening costs
+nothing until the resume or listing changes.
 
 ## ChatGPT or Claude
 
@@ -67,7 +74,7 @@ Each AI step uses the service that did it best in a side-by-side test:
 - **Reading listings** (pasted text, filling in missing details): ChatGPT (`OPENAI_API_KEY`). The two were about even.
 - **Benefits lookups** (benefits pages and web search): Claude (`ANTHROPIC_API_KEY`). It found real figures with quotes.
 - **Scoring Interested jobs** (resume and interests vs the listing): Claude Sonnet. It read her resume accurately and judged each job's mix of work; ChatGPT missed tools on her resume.
-- **Tailor resume**: Claude Sonnet, finding missing keywords and suggesting skills changes for a listing.
+- **Tailor resume**: Claude Sonnet, suggesting summary, skills and bullet changes for a listing.
 
 Change any of them in `.env` with `AI_LISTINGS`, `AI_BENEFITS`, `AI_MATCHING` or `AI_APPLICATIONS` (Tailor resume) (`openai` or `claude`). If the chosen
 service's key isn't in `.env`, the other one is used, so a laptop with only an OpenAI key still works.
@@ -99,6 +106,8 @@ Click **+ Add** under Companies and paste the careers page URL. These are recogn
 | Greenhouse / Lever / Ashby | `boards.greenhouse.io/stripe`, `jobs.lever.co/spotify`, `jobs.ashbyhq.com/ramp` |
 
 Many companies put their own domain in front (e.g. `careers.nationwide.com` is Workday underneath). For those, and for iCIMS/Jibe, Radancy and Phenom sites, pick the **Job board** type by hand and fill in the **Board ID** (the form shows the expected format). Anything else uses JSearch.
+
+In the company list, the company's **name** is a link that opens its careers page in a new window; clicking anywhere else on the row still filters the jobs to that company. A JSearch company keeps its careers page URL just for this link. The careers links Jen listed (`careers_links` in `seed/seed.json`) are filled in once on each database, only where a company's URL was blank.
 
 **Title keywords** and **locations** are comma-separated. A job must have one of the keywords in its title; locations match anywhere in the job's location text ("dublin oh" matches "Dublin, Ohio" but not Dublin, Ireland). US-remote jobs always pass, and jobs listed only as "Multiple locations" are kept so you can look.
 

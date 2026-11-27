@@ -606,6 +606,31 @@
       "notes": "Every other Friday off"
     }
   ],
+  "_careers_links_comment": "Jen's careers-page links (KAN-32). Filled in once on existing databases, only where a company's careers URL is blank.",
+  "careers_links": {
+    "Abbott Laboratories": "https://www.jobs.abbott/us/en",
+    "Bath & Body Works": "https://careers.bathandbodyworks.com/jobs",
+    "CACI International": "https://careers.caci.com/",
+    "Captech": "https://www.captechconsulting.com/careers/current-openings",
+    "Liberty Mutual": "https://libertymutual.eightfold.ai/careers?location=any&pid=618519748929&domain=libertymutual.com&sort_by=relevance",
+    "Microsoft": "https://careers.microsoft.com/v2/global/en/home.html",
+    "Victoria's Secret": "https://careers.victoriassecret.com/en/job-areas/corporate/",
+    "Maximus": "https://maximus.avature.net/careers/USHome",
+    "Wendy's": "https://wendys-careers.com/",
+    "ACT": "https://www.act.org/content/act/en/careers-at-act.html",
+    "Curriculum Associates": "https://careers.curriculumassociates.com/careers?start=0&pid=1443153892981&sort_by=hot",
+    "Excella": "https://www.excella.com/careers/current-opportunities",
+    "Huntington": "https://www.huntington.com/careers",
+    "Kforce": "https://www.kforce.com/find-work/search-jobs/",
+    "Kryterion": "https://www.kryterion.com/careers/",
+    "Robert Half": "https://www.roberthalf.com/us/en/jobs",
+    "Slalom": "https://jobs.slalom.com/en_US/careersmarketplace",
+    "ETS": "https://etscareers.pereless.com/",
+    "State of Ohio": "https://dasstateoh.taleo.net/careersection/oh_ext/jobsearch.ftl?lang=en",
+    "TEKsystems": "https://careers.teksystems.com/us/en",
+    "ManTech": "https://www.mantech.com/careers-/",
+    "The Amatriot Group": "https://amatriot.com/careers/"
+  },
   "searches": [
     {
       "name": "Business Analyst – Columbus",

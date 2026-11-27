@@ -50,11 +50,15 @@ edit tell Eric to **refresh the page**; mention a restart only when one is reall
   Claude (`AI_BENEFITS`), each falling back to whichever key is present.
 - Values read by AI are checked against the source text before they're saved (see `importer.fill_gaps`,
   `benefits._quoted_figures`). Keep that pattern for anything new.
-- Tailor resume (`jobsearch/tailor.py`) never edits her resume file; it writes a copy. It starts from the
+- Tailor resume (`jobsearch/tailor.py`) never edits her resume file. Its Save downloads a copy. It starts from the
   .docx last loaded with "Load resume file…" (kept in the database), else `profile/Resume.docx`. Only the
   summary, bullets and the Key Skills / Common Artifacts Produced / Recent Tools & Technology sections may
-  change, with the wording she types in each box. `check_answer` keeps only keywords that are in the listing
-  and missing from her resume, and flags words new to her resume (she decides what's true). Names, contact
-  line, headings, employers, titles and dates stay fixed. Keep those limits.
+  change, with the wording she saves from each box. `check_answer` keeps only:
+  - keywords that are in the listing and missing from her resume
+  - qualifications copied from the listing
+  - bullet keywords that the new text really adds
+  It also flags words new to her resume (she decides what's true). Skills added and removed are worked out in
+  code, not taken from the AI. Names, contact line, headings, employers, titles and dates stay fixed. Keep those
+  limits.
 - UI text is plain language for Jen (not developer terms).
 - Commit and push only when Eric asks. Let changes pile up until then.
