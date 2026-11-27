@@ -109,6 +109,21 @@ Many companies put their own domain in front (e.g. `careers.nationwide.com` is W
 
 In the company list, the company's **name** is a link that opens its careers page in a new window; clicking anywhere else on the row still filters the jobs to that company. A JSearch company keeps its careers page URL just for this link. The careers links Jen listed (`careers_links` in `seed/seed.json`) are filled in once on each database, only where a company's URL was blank.
 
+Above the company list, **Filter:** narrows it by how each company is searched:
+- **JSearch:** shows only the companies searched through JSearch. Those are worth checking by hand through their name link.
+- **Career page:** shows only the companies whose careers site the app searches directly, and ticks them for **Check selected**, which is free.
+- **none:** shows them all again and clears the ticks.
+
+**Reset** also turns the filter off, but leaves the ticks alone.
+
+## Missing information
+
+The **Missing information** checkbox above the job list shows New, Interested and Applied jobs that have no
+description, or whose company is missing any of its benefit ratings (Retirement, PTO, Commute, Bonus). Other
+statuses never show while it's checked. Badges say what's missing ("No description", "No Commute rating",
+"No benefits ratings"). Fill descriptions with **Reload these from their listings**, and ratings with the
+company's **Benefits** button.
+
 **Title keywords** and **locations** are comma-separated. A job must have one of the keywords in its title; locations match anywhere in the job's location text ("dublin oh" matches "Dublin, Ohio" but not Dublin, Ireland). US-remote jobs always pass, and jobs listed only as "Multiple locations" are kept so you can look.
 
 These connectors call the same endpoints the companies' own search pages use; they aren't official APIs, so a redesign can break one. A failed check shows "couldn't check *company*" — switch that company to JSearch or fix its board ID.

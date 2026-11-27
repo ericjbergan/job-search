@@ -5,6 +5,7 @@ const state = {
     searchId: null,      // filter jobs to one saved search
     companyId: null,     // ...or to one company (only one of the two at a time)
     selectedCompanies: new Set(),  // ticked in the company list, for "Check selected"
+    companyKind: '',     // company list filter: '' (all), 'jsearch' or 'career' (KAN-33)
     statuses: [],
     searches: [],
     companies: [],
@@ -396,11 +397,12 @@ async function deleteSearch(searchId) {
     await refreshAll();
 }
 
-// Company list back to its defaults: no search text, all priorities, sorted by priority.
-// (Ticked companies are left alone; use "Select: none" to clear those.)
+// Company list back to its defaults: no search text, all priorities, no JSearch / Career page filter,
+// sorted by priority. (Ticked companies are left alone; "Filter: none" clears those.)
 function resetCompanyFilters() {
     document.getElementById('companyFilter').value = '';
     document.getElementById('priorityFilter').value = '';
+    state.companyKind = '';
     setCompanySort('priority');
 }
 
@@ -415,7 +417,7 @@ function resetJobFilters() {
     document.getElementById('workModeFilter').value = '';
     document.getElementById('interestFilter').value = '';
     document.getElementById('hideNotFit').checked = true;
-    document.getElementById('noDescFilter').checked = false;
+    document.getElementById('missingInfoFilter').checked = false;
     document.getElementById('sortJobs').value = 'found';
     refreshAll();
 }
@@ -493,17 +495,20 @@ function renderCompanies() {
     }
     updateCheckSelectedButton();
     fillPriorityFilter();
+    showCompanyKind();
     const query = document.getElementById('companyFilter').value.trim();
     const priority = document.getElementById('priorityFilter').value;
     // The text box matches the name or the priority label ("m" finds Liberty Mutual and Medium companies);
     // the dropdown narrows to one priority.
     const shown = state.companies.filter(c => {
         const label = c.priority ? (state.priorities[c.priority] || '') : '';
+        if (!companyKindMatches(c)) return false;
         if (priority === 'none' ? c.priority : priority && String(c.priority) !== priority) return false;
         return companyMatches(c.name, query) || (label && companyMatches(label, query));
     });
     if (shown.length === 0) {
-        list.innerHTML = `<li class="empty">No company matches${query ? ` “${esc(query)}”` : ''}${priority ? ' at that priority' : ''}.</li>`;
+        const kind = { jsearch: ' searched through JSearch', career: ' with a careers page the app searches' }[state.companyKind] || '';
+        list.innerHTML = `<li class="empty">No company${kind} matches${query ? ` “${esc(query)}”` : ''}${priority ? ' at that priority' : ''}.</li>`;
         return;
     }
     list.innerHTML = shown.map(c => {
@@ -671,11 +676,24 @@ function toggleCompanySelected(companyId, checked) {
     updateCheckSelectedButton();
 }
 
-function selectCompanies(which) {
-    state.selectedCompanies = new Set(state.companies
-        .filter(c => which === 'all' || (which === 'free' && c.ats !== 'search'))
-        .map(c => c.id));
+// "Filter: JSearch · Career page · none" (KAN-33). Career page also ticks those companies (checking them is
+// free); JSearch only filters (checking those uses API quota). none shows them all and clears the ticks.
+function companyKindMatches(c) {
+    if (state.companyKind === 'jsearch') return c.ats === 'search';
+    if (state.companyKind === 'career') return c.ats !== 'search';
+    return true;
+}
+
+function setCompanyKind(kind) {
+    state.companyKind = kind;
+    if (kind === 'career') state.selectedCompanies = new Set(state.companies.filter(companyKindMatches).map(c => c.id));
+    if (!kind) state.selectedCompanies = new Set();
     loadCompanies();
+}
+
+function showCompanyKind() {
+    document.querySelectorAll('#companyKindLinks a').forEach(a =>
+        a.classList.toggle('active', a.dataset.kind === (state.companyKind || '') && !!state.companyKind));
 }
 
 function updateCheckSelectedButton() {
@@ -759,8 +777,9 @@ async function loadJobs() {
     const interest = document.getElementById('interestFilter').value;
     if (interest) params.append('interest', interest);
     if (document.getElementById('hideNotFit').checked) params.append('hide_not_fit', '1');
-    const noDesc = document.getElementById('noDescFilter').checked;
-    if (noDesc) params.append('no_description', '1');
+    // "Missing information" (KAN-34): New, Interested and Applied jobs with no description or missing benefits.
+    const missingInfo = document.getElementById('missingInfoFilter').checked;
+    if (missingInfo) params.append('missing_info', '1');
     params.append('sort', document.getElementById('sortJobs').value);
 
     const chip = document.getElementById('searchFilterChip');
@@ -787,7 +806,7 @@ async function loadJobs() {
     state.listedJobs = jobs;
     const fillBtn = document.getElementById('fillDescBtn');
     const reloadable = jobs.filter(j => !j.has_description && j.apply_link).length;
-    fillBtn.classList.toggle('hidden', !noDesc || !reloadable || !!fillBtn.dataset.busy);
+    fillBtn.classList.toggle('hidden', !missingInfo || !reloadable || !!fillBtn.dataset.busy);
     if (!fillBtn.dataset.busy) fillBtn.textContent = `Reload these ${reloadable} from their listings`;
     // The ranking button shows on the Interested tab; its counts change as jobs are marked Interested.
     loadRankStatus().catch(() => {});
@@ -814,6 +833,7 @@ function renderJobSummary(job) {
                 ${job.added_by_hand ? '<span class="badge by-hand" title="Added from its listing link">Added by hand</span> ' : ''}
                 ${job.found_where ? `<span class="badge found" title="Where you found this job">Found: ${esc(job.found_where)}</span> ` : ''}
                 ${job.has_description ? '' : '<span class="badge no-desc" title="No job description saved yet">No description</span> '}
+                ${job.missing_benefits && job.missing_benefits.length ? `<span class="badge no-desc" title="Add them with the company's Benefits button">${job.missing_benefits.length === 4 ? 'No benefits' : 'No ' + esc(job.missing_benefits.join(', '))} rating${job.missing_benefits.length === 1 ? '' : 's'}</span> ` : ''}
                 <span class="badge status-badge ${esc(job.status)}">${esc(STATUS_LABELS[job.status] || job.status)}${applied && job.applied_at ? ' ' + esc(shortDate(job.applied_at)) : ''}${job.interest_level && (interested || applied) ? ' · ' + esc(INTEREST_LABELS[job.interest_level]) : ''}</span>
                 <div class="flag-buttons">
                     <button class="flag ${interested ? 'on interested' : ''}" onclick="toggleFlag(event, ${job.id}, 'interested', '${esc(job.status)}')">★ Interested</button>
@@ -1713,7 +1733,7 @@ function duplicateNote(dups) {
 async function showExistingJob(jobId) {
     state.status = ''; state.searchId = null; state.companyId = null; state.skill = null;
     document.getElementById('textFilter').value = '';
-    document.getElementById('noDescFilter').checked = false;
+    document.getElementById('missingInfoFilter').checked = false;
     const job = await api(`/api/jobs/${jobId}`);
     if (['rejected', 'not_a_fit'].includes(job.status)) document.getElementById('hideNotFit').checked = false;
     await refreshAll();

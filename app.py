@@ -303,6 +303,7 @@ def api_list_jobs():
         interest=request.args.get("interest") or None,
         skill=request.args.get("skill") or None,
         no_description=request.args.get("no_description") == "1",
+        missing_info=request.args.get("missing_info") == "1",
     )
     # Flag jobs whose employer is already a saved company (by name, so job-board results count too).
     saved = {benefits.company_key(c["name"]): c["id"] for c in db.list_companies()}

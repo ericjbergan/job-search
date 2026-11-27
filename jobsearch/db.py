@@ -814,7 +814,9 @@ JOB_SORTS = {
 
 def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_only=False,
               hide_not_fit=False, sort="found", work_mode=None, interest=None, skill=None,
-              no_description=False):
+              no_description=False, missing_info=False):
+    """Jobs for the list. missing_info (KAN-34's "Missing information" box): New, Interested and Applied jobs
+    with no description or with any of the company's benefit scores missing (see missing_benefits)."""
     sql = ["SELECT j.id, j.company_id, j.title, j.company, j.location, j.is_remote, j.employment_type,",
            "j.posted_at, j.salary_min, j.salary_max, j.salary_period, j.salary_text,",
            "j.req_number, j.closes_at, j.applied_at, j.work_mode, j.work_mode_source, j.interest_level,",
@@ -853,6 +855,8 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
         args.append(skill)
     if no_description:
         where.append(f"length(COALESCE(j.description, '')) < {MIN_DESCRIPTION}")
+    if missing_info:
+        where.append("j.status IN ('new', 'interested', 'applied')")
     if text:
         where.append("(j.title LIKE ? OR j.company LIKE ? OR j.description LIKE ? OR j.notes LIKE ?"
                      " OR j.req_number LIKE ?)")
@@ -862,7 +866,23 @@ def list_jobs(status=None, search_id=None, company_id=None, text=None, remote_on
     sql.append("ORDER BY " + JOB_SORTS.get(sort, JOB_SORTS["found"]))
     with connect() as conn:
         rows = conn.execute(" ".join(sql), args).fetchall()
-    return [dict(r) for r in rows]
+    jobs = [dict(r) for r in rows]
+    if missing_info:
+        scores = benefits_by_key()
+        for j in jobs:
+            j["missing_benefits"] = missing_benefits(scores.get(benefits_mod.company_key(j["company"] or "")))
+        jobs = [j for j in jobs if not j["has_description"] or j["missing_benefits"]]
+    return jobs
+
+
+# Her four benefit ratings, as named on the Benefits panel.
+BENEFIT_SCORES = (("retirement_score", "Retirement"), ("pto_score", "PTO"), ("commute_score", "Commute"),
+                  ("bonus_score", "Bonus"))
+
+
+def missing_benefits(record):
+    """Which benefit ratings a company's record lacks (all four when there's no record)."""
+    return [label for key, label in BENEFIT_SCORES if not record or record.get(key) is None]
 
 
 MATCH_CRITERIA = ("skills", "interests", "salary", "benefits", "commute")

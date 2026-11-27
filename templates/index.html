@@ -104,8 +104,12 @@
                     </div>
                     <span class="hint">Straight-line distance. Remote jobs are always included.</span>
                 </div>
-                <div class="select-links">Select: <a onclick="selectCompanies('free')">free only</a> ·
-                    <a onclick="selectCompanies('none')">none</a></div>
+                <div class="select-links" id="companyKindLinks">Filter:
+                    <a data-kind="jsearch" onclick="setCompanyKind('jsearch')"
+                       title="Show only companies searched through JSearch">JSearch</a> ·
+                    <a data-kind="career" onclick="setCompanyKind('career')"
+                       title="Show only companies whose careers page the app searches directly, and tick them">Career page</a> ·
+                    <a data-kind="" onclick="setCompanyKind('')" title="Show all companies and clear the ticks">none</a></div>
                 <div class="company-filter-row">
                     <input id="companyFilter" class="company-filter" placeholder="Find a company…" oninput="renderCompanies()"
                            aria-label="Find a company by name or priority">
@@ -259,8 +263,8 @@
                 <div class="status-row">
                     <div id="statusTabs"></div>
                     <label class="check hide-not-fit"><input type="checkbox" id="hideNotFit" onchange="loadJobs()" checked> Hide not a fit &amp; rejected</label>
-                    <label class="check hide-not-fit" title="Show only jobs that have no description yet">
-                        <input type="checkbox" id="noDescFilter" onchange="loadJobs()"> No description</label>
+                    <label class="check hide-not-fit" title="Include missing Job description or missing benefits">
+                        <input type="checkbox" id="missingInfoFilter" onchange="loadJobs()"> Missing information</label>
                     <button type="button" class="small hidden" id="fillDescBtn" onclick="fillMissingDescriptions(this)"
                             title="Try Reload from listing on each of these jobs">Reload these from their listings</button>
                     <button type="button" class="add-btn small-add" id="rankBtn" onclick="rankButtonClick(this)">Rank Jobs</button>

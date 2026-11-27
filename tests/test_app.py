@@ -1506,6 +1506,28 @@ class DescriptionTests(FreshDbTest):
         only = self.client.get("/api/jobs?no_description=1").get_json()
         self.assertEqual([j["title"] for j in only], ["No text"])
 
+    def test_missing_information(self):
+        """KAN-34: New, Interested and Applied jobs with no description or any benefit rating missing."""
+        jobs = []
+        for n, (title, company) in enumerate([("Beta job", "Beta"), ("Gamma job", "Gamma"),
+                                              ("Gamma interview", "Gamma")], start=3):
+            j = board_job(n, title)
+            j["employer_name"], j["job_description"] = company, self.TEXT
+            jobs.append(j)
+        db.save_results(jobs)
+        ids = {j["title"]: j["id"] for j in db.list_jobs()}
+        db.update_job(ids["Gamma interview"], {"status": "interviewing"})
+        db.update_job(ids["Has text"], {"status": "applied"})
+        db.save_benefits("Acme", {"retirement_score": 4, "pto_score": 3, "commute_score": 2, "bonus_score": 1})
+        db.save_benefits("Beta", {"retirement_score": 4, "pto_score": 3, "bonus_score": 0})
+        got = {j["title"]: j["missing_benefits"] for j in self.client.get("/api/jobs?missing_info=1").get_json()}
+        self.assertEqual(got, {"No text": [],                                    # no description
+                               "Beta job": ["Commute"],                          # one rating missing
+                               "Gamma job": ["Retirement", "PTO", "Commute", "Bonus"]})  # no benefits at all
+        # Other statuses never show (Interviewing here), even on their own tab.
+        self.assertEqual(self.client.get("/api/jobs?missing_info=1&status=interviewing").get_json(), [])
+        self.assertEqual([j["title"] for j in self.client.get("/api/jobs?missing_info=1&status=applied").get_json()], [])
+
     def test_pasted_description_is_kept(self):
         jid = self.ids["No text"]
         r = self.client.patch(f"/api/jobs/{jid}", json={"description": "Pasted:\r\n\r\n\r\n" + self.TEXT})
