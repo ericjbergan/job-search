@@ -34,6 +34,10 @@ job except Applied, Rejected and Not a fit gets rank numbers, shown in the middl
 - **Overall**: Qualify ×3, Interest ×3, Salary ×2, Retirement ×2, Sick & PTO ×1, Commute ×1, Bonus ×1.
   Qualify and Interest count by their rank, so they carry their full weight. Sort by **Overall rank**.
 
+Her name and contact details never go to the AI. The name and contact lines at the top of her resume are left
+out (name, address, phone, email, LinkedIn), and her name, emails, phone numbers and web addresses are taken out
+of the rest. Tailor resume does the same. Her own resume file keeps them all.
+
 Opening a job shows the full breakdown, where she can also set her own Qualify / Interest score.
 The resume and interests stay in her local database.
 

@@ -527,11 +527,13 @@ def suggest(job, match=None, again=False):
     if saved.get("key") == key and "bullets" in saved and not again:
         return _result(job, saved, paras)
 
+    private, name = ranking.private_lines([p["text"] for p in paras])  # her name and contact lines stay here
     numbered = "\n".join(
         f"[{p['i']}] [{p['kind'] if p['kind'] in ('summary', 'bullet') else 'fixed'}]"
-        f"{' (' + p['job'] + ')' if p.get('job') else ''} {ranking.resume_for_ai(p['text'])}"
-        for p in paras if p["text"].strip() and p["kind"] != "skills")
-    skills = "\n".join(f"{s['label']}: " + " | ".join(s["items"]) for s in skills_sections(paras)) or "(none)"
+        f"{' (' + p['job'] + ')' if p.get('job') else ''} {ranking.scrub(p['text'], name)}"
+        for n, p in enumerate(paras) if p["text"].strip() and p["kind"] != "skills" and n not in private)
+    skills = "\n".join(f"{s['label']}: " + " | ".join(ranking.scrub(x, name) for x in s["items"])
+                       for s in skills_sections(paras)) or "(none)"
     notes = ""
     if match:
         notes = ("\n\nWHAT RANK JOBS FOUND:\nMeets: " + ", ".join(match.get("matched") or []) +

@@ -10,9 +10,14 @@ GitHub `ericjbergan/job-search` is public. Never commit:
 - any database (`jobs.db`, `demo.db`, `*.db`): they hold Jen's statuses, notes and application details
 - `.env` (API keys), `ai-comparison.html`, her spreadsheets, or other personal data of hers
 
-Exception, by Eric's decision (2026-11-26): `profile/Resume.docx` and `profile/interests.txt` are
-committed on purpose (her resume is already public), so a fresh install fills the Resume & interests
-card. Rank Jobs strips phone numbers and emails before sending the resume to the AI.
+`profile/interests.txt` is committed on purpose (Eric, 2026-11-26), so a fresh install fills the interests.
+`profile/Resume.docx` is NOT committed any more (Eric, 2026-11-28): it has her name and contact details. It's
+git-ignored, blocked by the pre-commit hook, and stays only on her computer. It is still in older commits' history.
+
+Her name and contact details never go to the AI (Jen's request, 2026-11-28): `ranking.private_lines`
+leaves out the name line and the contact lines at the top of the resume, and `ranking.scrub` takes her name,
+emails, phone numbers and web addresses out of every other line. Rank Jobs (`resume_for_ai`) and Tailor resume
+both use them; anything new that sends her resume to an AI must too.
 - never import or store the spreadsheet's "Log in Info" column (passwords)
 - the `.browser-*` folders left by the removed Fill application: they hold her sign-ins to job sites
 

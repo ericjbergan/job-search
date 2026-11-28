@@ -133,18 +133,58 @@ def interest_score(mix, prefs, profile):
     return score
 
 
-# Contact details aren't needed to judge fit, so they're left out of what's sent to the AI.
-_CONTACT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+|\(?\b\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}\b|\b(?:mobile|phone|cell|email)\s*:?", re.I)
+# Her name and contact details aren't needed to judge fit or suggest changes, so they never go to the AI:
+# the name line and contact lines at the top of her resume are left out, and her name, emails, phone
+# numbers and web addresses are taken out wherever else they appear. Her resume file keeps them all.
+_CONTACT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+|\(?\b\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}\b"
+                      r"|(?:https?://|www\.)\S+|\b(?:[\w-]+\.)*linkedin\.com\S*"
+                      r"|\b(?:mobile|phone|cell|email|e-mail|linkedin)\s*:?", re.I)
+_PLACE = re.compile(r"\b[A-Z][A-Za-z .'-]*,\s*[A-Z]{2}\b|\b\d{5}(?:-\d{4})?\b")
+_HEADINGS = ("summary", "profile", "experience", "employment", "skills", "qualifications", "education",
+             "certifications", "objective", "history", "accomplishments", "achievements")
+HEADER_LINES = 5  # the name and contact block is in the first few lines
+
+
+def _is_heading(line):
+    words = re.findall(r"[A-Za-z&]+", line)
+    if not words or len(words) > 6:
+        return False
+    return line.strip() == line.strip().upper() or any(w.lower() in _HEADINGS for w in words)
+
+
+def private_lines(lines):
+    """Which of these resume lines are her name and contact block (left out of what the AI sees),
+    and the words of her name (taken out of the other lines). -> (set of line indexes, [name words])"""
+    private, name, seen = set(), [], 0
+    for i, line in enumerate(lines):
+        text = (line or "").strip()
+        if not text:
+            continue
+        if _is_heading(text) or seen >= HEADER_LINES:
+            break
+        seen += 1
+        if seen == 1 and not re.search(r"\d", text) and len(text.split()) <= 6:
+            private.add(i)  # the first line is her name ("Jane Doe, CBAP")
+            name = [w for w in re.findall(r"[A-Za-z][A-Za-z'-]+", text.split(",")[0]) if len(w) > 1]
+        elif _CONTACT.search(text) or _PLACE.search(text):
+            private.add(i)  # address, phone, email, LinkedIn
+    return private, name
+
+
+def scrub(text, name=()):
+    """One resume line with her name, emails, phone numbers and web addresses taken out."""
+    cleaned = _CONTACT.sub("", text or "")
+    for word in name:
+        cleaned = re.sub(rf"\b{re.escape(word)}\b(?:'s)?", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"(\s*\|\s*)+$", "", re.sub(r"^\s*(\|\s*)+", "", re.sub(r"(\s*\|\s*){2,}", " | ", cleaned)))
+    return re.sub(r"[ \t]{2,}", " ", cleaned).rstrip()
 
 
 def resume_for_ai(resume):
-    """Her resume without email addresses and phone numbers (the file keeps them)."""
-    lines = []
-    for line in (resume or "").split("\n"):
-        cleaned = _CONTACT.sub("", line)
-        cleaned = re.sub(r"(\s*\|\s*)+$", "", re.sub(r"^\s*(\|\s*)+", "", re.sub(r"(\s*\|\s*){2,}", " | ", cleaned)))
-        lines.append(cleaned.rstrip())
-    return "\n".join(lines)
+    """Her resume without her name and contact details (the file keeps them)."""
+    lines = (resume or "").split("\n")
+    private, name = private_lines(lines)
+    return "\n".join(scrub(line, name) for i, line in enumerate(lines) if i not in private).strip("\n")
 
 
 def _score(value):

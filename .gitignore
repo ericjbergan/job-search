@@ -26,5 +26,9 @@ ai-comparison.html
 # Marker: requirements already installed on this computer (see start-jobsearch.bat)
 .requirements-installed
 
+# Her resume has her name and contact details; it stays on this computer only (repo is public)
+profile/[Rr]esume.docx
+profile/[Rr]esume.txt
+
 # Browser profile left by the removed Fill application (her sign-ins to job sites); safe to delete
 .browser-*/

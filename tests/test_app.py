@@ -1693,8 +1693,13 @@ Sick & PTO: 0
 
     def test_contact_details_are_not_sent_to_the_ai(self):
         from jobsearch import ranking
-        text = ranking.resume_for_ai("Jane Doe\nNewark, OH | Mobile: 555-123-4567 | Email: jane@example.com\nSQL")
-        self.assertEqual(text, "Jane Doe\nNewark, OH\nSQL")
+        text = ranking.resume_for_ai("Jane Doe, CBAP\nSenior Business Analyst\n"
+                                     "Newark, OH 43055 | Mobile: 555-123-4567 | Email: jane@example.com\n"
+                                     "linkedin.com/in/janedoe\n\nPROFESSIONAL SUMMARY\nAnalyst. Jane's team used SQL.\n"
+                                     "Call (555) 123-4567 or see https://janedoe.com")
+        self.assertEqual(text, "Senior Business Analyst\n\nPROFESSIONAL SUMMARY\nAnalyst. team used SQL.\nCall or see")
+        self.assertEqual(ranking.resume_for_ai("PROFESSIONAL SUMMARY\nAnalyst at Acme, Columbus, OH"),
+                         "PROFESSIONAL SUMMARY\nAnalyst at Acme, Columbus, OH")   # no name line: nothing taken out
 
 
 
@@ -1899,7 +1904,8 @@ class TailorTests(FreshDbTest):
             r = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
             again = self.client.post(f"/api/jobs/{jid}/tailor").get_json()
             self.assertEqual(len(sent), 1)                   # kept: opening it again costs nothing
-        self.assertNotIn("jane@example.com", sent[0])        # contact details aren't sent
+        for private in ("jane@example.com", "Jane", "Doe", "Newark"):   # her name and contact details aren't sent
+            self.assertNotIn(private, sent[0])
         self.assertIn("Key Skills: Requirements gathering | Root cause analysis | Facilitate UAT", sent[0])
         self.assertEqual(again["bullets"], r["bullets"])
         self.assertEqual(set(r["targets"]), {"p3", "s0", "s1", "p15", "p19"})   # only bullets with suggestions
